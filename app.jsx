@@ -2,7 +2,7 @@ const { useState, useEffect, useRef, useMemo } = React;
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "brandName": "phi.ba",
-  "tenantName": "Yıldız Giyim",
+  "tenantName": "Fibabanka",
   "primaryColor": "#9FD8C0",
   "primaryTextOn": "#0E1F1A",
   "density": "comfortable",
@@ -80,6 +80,20 @@ LIMIT 10;`,
 
   insight: "Hacmi üst gelir segmenti taşıyor — ilk 10'un **%38'i** bu segmentten. Premium kredi kartı tek başına haftalık bazda **%22** yukarıda; chargeback oranı stabil."
 };
+
+const THINKING_STEPS = [
+"Soruyu netleştiriyorum",
+"Şema ve metrikleri kontrol ediyorum",
+"En doğru sorgu planını kuruyorum"];
+
+const THINKING_MIN_MS = 1600;
+const THINKING_MAX_MS = 3400;
+
+function getThinkingDuration(text) {
+  return Math.max(
+    THINKING_MIN_MS,
+    Math.min(THINKING_MAX_MS, 1250 + text.trim().length * 32));
+}
 
 // ---------- Logo ----------
 const Logo = ({ name }) =>
@@ -226,12 +240,6 @@ function HomeScreen({ tenantName, onAsk }) {
             onChange={setV}
             onSubmit={() => v.trim() && onAsk(v.trim())}
             placeholder="örn. Son 30 günde işlem hacmine göre en çok kullanılan 10 ürün" />
-          
-        </div>
-
-        <div className="home-empty">
-          <Icon name="spark" size={14} />
-          <span></span>
         </div>
       </div>
     </div>);
@@ -375,13 +383,50 @@ function AgentMessage({ q, data, showSqlDefault, isLast }) {
 
 }
 
+function ThinkingMessage() {
+  const [stepIdx, setStepIdx] = useState(0);
+
+  useEffect(() => {
+    const tick = window.setInterval(() => {
+      setStepIdx((idx) => (idx + 1) % THINKING_STEPS.length);
+    }, 850);
+    return () => window.clearInterval(tick);
+  }, []);
+
+  return (
+    <div className="msg msg-agent">
+      <div className="agent-avatar">
+        <svg viewBox="0 0 24 24" width="16" height="16">
+          <circle cx="12" cy="12" r="10" fill="var(--brand)" />
+          <circle cx="12" cy="12" r="3.2" fill="var(--ink)" />
+        </svg>
+      </div>
+      <div className="agent-body">
+        <div className="thinking-card">
+          <div className="thinking-pill">
+            <span className="dot live" />
+            <span>Düşünüyor</span>
+          </div>
+          <div className="thinking-title">{THINKING_STEPS[stepIdx]}</div>
+          <div className="thinking-sub">Yanıtı hemen dökmek yerine önce soruyu anlamlandırıp en tutarlı cevabı hazırlıyorum.</div>
+          <div className="thinking-dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+        </div>
+      </div>
+    </div>);
+
+}
+
 // ---------- Conversation Screen ----------
 function ConversationScreen({ messages, onAsk, showSqlDefault }) {
   const [v, setV] = useState("");
   const scrollRef = useRef(null);
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages.length]);
+  }, [messages]);
 
   const first = messages[0];
   const title = first ? first.text : "Yeni konu";
@@ -403,9 +448,11 @@ function ConversationScreen({ messages, onAsk, showSqlDefault }) {
       <div className="convo-scroll" ref={scrollRef}>
         <div className="convo-inner">
           {messages.map((m, i) =>
-          <React.Fragment key={i}>
+          <React.Fragment key={m.id}>
               <UserBubble text={m.text} />
-              <AgentMessage q={m.text} data={DEMO_RESPONSE} showSqlDefault={showSqlDefault} isLast={i === messages.length - 1} />
+              {m.status === "done" ?
+            <AgentMessage q={m.text} data={DEMO_RESPONSE} showSqlDefault={showSqlDefault} isLast={i === messages.length - 1} /> :
+            <ThinkingMessage />}
             </React.Fragment>
           )}
         </div>
@@ -434,6 +481,8 @@ function App() {
   const [view, setView] = useState("home");
   const [messages, setMessages] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const timeoutsRef = useRef(new Map());
+  const nextMessageIdRef = useRef(1);
 
   useEffect(() => {
     document.documentElement.style.setProperty("--brand", tweaks.primaryColor);
@@ -441,12 +490,34 @@ function App() {
     document.documentElement.dataset.density = tweaks.density;
   }, [tweaks]);
 
+  useEffect(() => () => {
+    timeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    timeoutsRef.current.clear();
+  }, []);
+
+  const markMessageDone = (id) => {
+    setMessages((items) =>
+    items.map((item) => item.id === id ? { ...item, status: "done" } : item)
+    );
+    const timeoutId = timeoutsRef.current.get(id);
+    if (timeoutId) window.clearTimeout(timeoutId);
+    timeoutsRef.current.delete(id);
+  };
+
   const ask = (text) => {
-    setMessages((m) => [...m, { text }]);
+    const id = nextMessageIdRef.current++;
+    setMessages((m) => [...m, { id, text, status: "thinking" }]);
     setView("convo");
     setSidebarOpen(true);
+    const timeoutId = window.setTimeout(() => markMessageDone(id), getThinkingDuration(text));
+    timeoutsRef.current.set(id, timeoutId);
   };
-  const newThread = () => {setMessages([]);setView("home");};
+  const newThread = () => {
+    timeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    timeoutsRef.current.clear();
+    setMessages([]);
+    setView("home");
+  };
 
   return (
     <div className="app">
