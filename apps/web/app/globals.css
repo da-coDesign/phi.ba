@@ -32,3 +32,104 @@ body {
   border: 0;
   background: #fbfaf6;
 }
+
+.flow-launcher {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 20;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid #d9d5ca;
+  border-radius: 8px;
+  background: #14171a;
+  color: #fbfaf6;
+  font: 600 13px/1 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  box-shadow: 0 10px 30px rgba(20, 23, 26, .18);
+  cursor: pointer;
+}
+
+.flow-drawer {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  bottom: 14px;
+  z-index: 30;
+  width: min(420px, calc(100vw - 28px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #e8e5dd;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgba(20, 23, 26, .24);
+}
+
+.flow-head {
+  min-height: 58px;
+  padding: 10px 12px 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #e8e5dd;
+  background: #fbfaf6;
+}
+
+.flow-head span,
+.flow-error span {
+  display: block;
+  color: #6b7077;
+  font: 500 11px/1.35 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.flow-head strong,
+.flow-error strong {
+  display: block;
+  margin-top: 3px;
+  color: #14171a;
+  font: 650 13px/1.2 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.flow-head button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid #e8e5dd;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #3b4046;
+  font: 600 12px/1 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+}
+
+.flow-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.flow-chatkit {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.flow-error {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 12px;
+  z-index: 2;
+  padding: 10px 12px;
+  border: 1px solid #edcfd5;
+  border-radius: 8px;
+  background: #fff7f8;
+}
+
+@media (max-width: 760px) {
+  .flow-drawer {
+    inset: 0;
+    width: auto;
+    border-radius: 0;
+  }
+}
