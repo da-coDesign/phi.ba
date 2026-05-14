@@ -17,8 +17,11 @@ class MockModelProvider implements ModelProvider {
   async complete(input: { model: string; prompt: string; variables?: JsonRecord }): Promise<{ text: string; tokenUsage: { input: number; output: number } }> {
     const userMessage = String(input.variables?.user_message ?? "");
     const agentName = String(input.variables?.agent ?? "phi.ba agent");
+    const intent = String(input.variables?.intent ?? "direct_answer");
+    const toolSummary = String(input.variables?.tool_summary ?? "");
+    const toolKey = String(input.variables?.tool_key ?? "none");
     const text = userMessage
-      ? `${agentName}: Sorunu aldım. Bunu tenant kapsamı, RBAC, araç izni ve model politikası kontrollerinden geçirerek yanıtlıyorum.\n\n${userMessage} için ilk güvenli okuma: ilgili metrik kırılımını, zaman penceresini ve etkilenen segmenti doğrulamak gerekir. Veri çalıştırma gerekiyorsa platform önce salt-okunur sorgu, izin ve denetim kaydı kontrollerini tamamlar; aksiyona dönüşecek bir sonuç çıkarsa onay akışına alınır.`
+      ? `${agentName}: Sorunu aldım. Niyet: ${intent}. ${toolKey !== "none" ? `Çalıştırılan güvenli araç: ${toolKey}. ` : ""}${toolSummary || "Bu istek için kısa, kontrollü bir yanıt hazırlıyorum."}\n\nSonraki adım: veri veya aksiyon canlı sisteme etki edecekse tenant izolasyonu, RBAC, denetim kaydı ve gerekiyorsa insan onayı tamamlanmadan ilerlemem.`
       : `Mock ${input.model} response: ${input.prompt.slice(0, 160)}`;
     return {
       text,

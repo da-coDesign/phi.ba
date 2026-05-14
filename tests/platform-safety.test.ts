@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { permissions, type RequestContext } from "@phi-ba/contracts";
-import { agentService } from "../apps/api/src/agents.js";
+import { agentService, classifyAgentIntent } from "../apps/api/src/agents.js";
 import { chatKitService } from "../apps/api/src/chatkit.js";
 import { connectorService } from "../apps/api/src/connectors.js";
 import { ApiError } from "../apps/api/src/errors.js";
@@ -108,6 +108,54 @@ describe("enterprise safety controls", () => {
     expect(chunks.some((chunk) => chunk.event === "token")).toBe(true);
     expect(chunks.at(-1)?.event).toBe("done");
     expect(store.snapshot().agentExecutionTraces[0]?.status).toBe("completed");
+  });
+
+  it("classifies banking prompts into governed agent intents", () => {
+    expect(classifyAgentIntent("Kart onay oranı neden düştü?")).toBe("data_query");
+    expect(classifyAgentIntent("Rakip faiz oranlarını karşılaştır")).toBe("market_compare");
+    expect(classifyAgentIntent("Faiz 3.6 olursa ne olur?")).toBe("simulation");
+    expect(classifyAgentIntent("Bunun için Jira ticket oluştur")).toBe("action_request");
+  });
+
+  it("returns card-ready data for metric questions through the central agent", async () => {
+    let final: any;
+    for await (const chunk of agentService.streamExecute(context(), {
+      agentId: "agent_risk",
+      message: "Kart onay oranı neden düştü?"
+    })) {
+      if (chunk.event === "done") final = chunk.data;
+    }
+
+    expect(final.result.mode).toBe("data_card");
+    expect(final.result.sql).toContain("kart_islemleri");
+    expect(final.result.rows.length).toBeGreaterThan(0);
+  });
+
+  it("asks for clarification instead of forcing one-shot execution", async () => {
+    let final: any;
+    for await (const chunk of agentService.streamExecute(context(), {
+      agentId: "agent_risk",
+      message: "limit"
+    })) {
+      if (chunk.event === "done") final = chunk.data;
+    }
+
+    expect(final.result.mode).toBe("clarification");
+    expect(final.result.toolCalls).toHaveLength(0);
+  });
+
+  it("opens approval for risky agent action requests", async () => {
+    let final: any;
+    for await (const chunk of agentService.streamExecute(context(), {
+      agentId: "agent_risk",
+      message: "Bu bulgu için Jira ticket oluştur"
+    })) {
+      if (chunk.event === "done") final = chunk.data;
+    }
+
+    expect(final.status).toBe("pending_approval");
+    expect(final.result.approvalRequestId).toBeTruthy();
+    expect(store.snapshot().approvalRequests).toHaveLength(1);
   });
 
   it("keeps the configured OpenAI Agent Builder workflow ID available server-side", () => {

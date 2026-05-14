@@ -433,23 +433,74 @@ function generateMockResult(question, revision = 0) {
   };
 }
 
-function buildAgentResult(question, answer, fallbackRevision = 0) {
+function buildAgentResult(question, answer, fallbackRevision = 0, finalPayload) {
   const base = generateMockResult(question, fallbackRevision);
+  const serverResult = finalPayload && finalPayload.result;
+  if (serverResult) {
+    const rows = Array.isArray(serverResult.rows) ? serverResult.rows : [];
+    const columns = Array.isArray(serverResult.columns) ? serverResult.columns : [];
+    const mode = serverResult.mode || (rows.length ? "data_card" : "text");
+    return {
+      ...base,
+      mode,
+      question,
+      intro: serverResult.answer || answer || base.intro,
+      sql: serverResult.sql || "",
+      tables: serverResult.tables || inferTablesFromSql(serverResult.sql || ""),
+      columns,
+      rows,
+      stats: Array.isArray(serverResult.stats) && serverResult.stats.length ? serverResult.stats : buildStatsFromServerRows(rows, columns),
+      insight: serverResult.answer || answer || base.insight,
+      agentAnswer: serverResult.answer || answer,
+      citations: serverResult.citations || [],
+      toolCalls: serverResult.toolCalls || [],
+      approvalRequestId: serverResult.approvalRequestId || "",
+      category: serverResult.category || base.category,
+      recommendedAction: serverResult.recommendedAction || base.recommendedAction,
+      boardable: serverResult.boardable !== false && rows.length > 0,
+      latencyMs: Math.max(120, Math.min(1800, String(answer || "").length * 3)),
+      generatedAt: new Date().toISOString()
+    };
+  }
   return {
     ...base,
+    mode: "data_card",
     intro: answer || base.intro,
     insight: answer || base.insight,
     agentAnswer: answer,
+    boardable: true,
     latencyMs: Math.max(120, Math.min(1800, answer.length * 3)),
     generatedAt: new Date().toISOString()
   };
 }
 
-async function streamAgentAnswer(question, onToken) {
+function inferTablesFromSql(sql) {
+  const tables = [];
+  String(sql || "").replace(/\b(?:FROM|JOIN)\s+([a-zA-Z0-9_]+)/g, (_match, table) => {
+    if (!tables.includes(table)) tables.push(table);
+    return _match;
+  });
+  return tables;
+}
+
+function buildStatsFromServerRows(rows, columns) {
+  if (!rows.length || !columns.length) return [];
+  return columns
+    .map((column, index) => ({ column, index }))
+    .filter(({ column, index }) => column.type !== "text" && rows.some((row) => typeof row[index] === "number"))
+    .slice(0, 3)
+    .map(({ column, index }) => ({
+      label: column.label,
+      type: column.type,
+      value: rows.reduce((total, row) => total + (Number(row[index]) || 0), 0)
+    }));
+}
+
+async function streamAgentAnswer(question, onEvent) {
   const response = await fetch(`${API_BASE}/api/v1/agents/${DEFAULT_AGENT_ID}/stream`, {
     method: "POST",
     headers: API_HEADERS,
-    body: JSON.stringify({ message: question, toolKey: "rag.retrieve" })
+    body: JSON.stringify({ message: question })
   });
   if (!response.ok || !response.body) throw new Error(`Agent stream failed (${response.status})`);
 
@@ -467,7 +518,9 @@ async function streamAgentAnswer(question, onToken) {
     for (const frame of frames) {
       const parsed = parseSseFrame(frame);
       if (!parsed) continue;
-      if (parsed.event === "token") onToken(String(parsed.data.token || ""));
+      if (parsed.event === "token") onEvent({ type: "token", token: String(parsed.data.token || "") });
+      if (parsed.event === "progress") onEvent({ type: "progress", message: String(parsed.data.message || "") });
+      if (parsed.event === "tool") onEvent({ type: "tool", message: `${parsed.data.toolKey || "tool"} tamamlandı`, data: parsed.data });
       if (parsed.event === "done") finalPayload = parsed.data;
       if (parsed.event === "error") throw new Error(parsed.data.message || "Agent stream failed");
     }
@@ -859,6 +912,7 @@ function ChartBars({ data }) {
 function ResultBlock({ data, showSqlDefault }) {
   const [tab, setTab] = useState("chart");
   const [showSql, setShowSql] = useState(showSqlDefault);
+  const hasSql = Boolean(data.sql);
 
   return (
     <div className="result">
@@ -869,15 +923,15 @@ function ResultBlock({ data, showSqlDefault }) {
         </div>
         <div className="result-meta">
           <span className="meta-pill"><span className="dot ok" />{data.rows.length} satır · {data.latencyMs}ms</span>
-          <button className="meta-btn" onClick={() => setShowSql((current) => !current)}>
+          {hasSql && <button className="meta-btn" onClick={() => setShowSql((current) => !current)}>
             <Icon name="code" size={12} />
             <span>SQL'i {showSql ? "gizle" : "göster"}</span>
-          </button>
+          </button>}
           <button className="meta-btn"><Icon name="share" size={12} /></button>
         </div>
       </div>
 
-      {showSql &&
+      {hasSql && showSql &&
         <div className="sql-block">
           <div className="sql-head">
             <span className="sql-label">Üretilen SQL · postgres</span>
@@ -958,6 +1012,8 @@ function AgentMessage({ message, showSqlDefault, onSaveToBoard, onOpenBoards }) 
   const saved = message.savedToBoard;
   const saveLabel = saved ? "Panoda" : "Panoya ekle";
   const answer = message.result.agentAnswer;
+  const hasDataCard = Array.isArray(message.result.rows) && message.result.rows.length > 0 && Array.isArray(message.result.columns) && message.result.columns.length > 0;
+  const canSave = hasDataCard && message.result.boardable !== false;
 
   return (
     <div className="msg msg-agent">
@@ -971,21 +1027,65 @@ function AgentMessage({ message, showSqlDefault, onSaveToBoard, onOpenBoards }) 
         <div className={answer ? "agent-intro agent-live-answer" : "agent-intro"}>
           {message.result.intro.split("`").map((segment, index) => index % 2 ? <code key={index}>{segment}</code> : segment)}
         </div>
-        <ResultBlock data={message.result} showSqlDefault={showSqlDefault} />
+        {hasDataCard ? (
+          <ResultBlock data={message.result} showSqlDefault={showSqlDefault} />
+        ) : (
+          <AgentModeCard result={message.result} />
+        )}
         <div className="msg-actions">
           <button className="msg-act"><Icon name="thumbs-up" size={13} /></button>
           <button className="msg-act"><Icon name="thumbs-down" size={13} /></button>
           <button className="msg-act"><Icon name="copy" size={13} /></button>
           <button className="msg-act"><Icon name="share" size={13} /></button>
-          <span className="sep" />
-          <button
-            className={"msg-act msg-act-ghost" + (saved ? " is-saved" : "")}
-            onClick={() => saved ? onOpenBoards() : onSaveToBoard(message.id)}>
-            <Icon name={saved ? "check" : "plus"} size={13} />
-            {saveLabel}
-          </button>
+          {canSave && <>
+            <span className="sep" />
+            <button
+              className={"msg-act msg-act-ghost" + (saved ? " is-saved" : "")}
+              onClick={() => saved ? onOpenBoards() : onSaveToBoard(message.id)}>
+              <Icon name={saved ? "check" : "plus"} size={13} />
+              {saveLabel}
+            </button>
+          </>}
         </div>
       </div>
+    </div>
+  );
+}
+
+function AgentModeCard({ result }) {
+  const toolCalls = Array.isArray(result.toolCalls) ? result.toolCalls : [];
+  const citations = Array.isArray(result.citations) ? result.citations : [];
+  const modeLabel = {
+    text: "Yanıt",
+    clarification: "Netleştirme",
+    approval: "Onay bekliyor",
+    market: "Pazar karşılaştırması",
+    simulation: "Simülasyon"
+  }[result.mode] || "Agent yanıtı";
+
+  return (
+    <div className={"agent-mode-card is-" + (result.mode || "text")}>
+      <div className="agent-mode-head">
+        <span className="agent-mode-pill">{modeLabel}</span>
+        {result.approvalRequestId && <span className="agent-mode-id">{result.approvalRequestId}</span>}
+      </div>
+      {toolCalls.length > 0 &&
+        <div className="tool-step-list">
+          {toolCalls.map((call, index) =>
+            <span key={index}><Icon name="check" size={11} />{call.toolKey || "tool"} · {call.status || "completed"}</span>
+          )}
+        </div>
+      }
+      {citations.length > 0 &&
+        <div className="citation-list">
+          {citations.slice(0, 3).map((citation, index) =>
+            <div key={citation.id || index} className="citation-item">
+              <strong>Kaynak {index + 1}</strong>
+              <span>{citation.excerpt || citation.documentId || "Governed evidence"}</span>
+            </div>
+          )}
+        </div>
+      }
     </div>
   );
 }
@@ -1473,16 +1573,19 @@ function App() {
 
     try {
       let streamed = "";
-      const finalPayload = await streamAgentAnswer(text, (token) => {
-        streamed += token;
+      const steps = [];
+      const renderStream = () => [steps.length ? steps.map((step) => `• ${step}`).join("\n") : "", streamed].filter(Boolean).join("\n\n");
+      const finalPayload = await streamAgentAnswer(text, (event) => {
+        if (event.type === "token") streamed += event.token;
+        if ((event.type === "progress" || event.type === "tool") && event.message) steps.push(event.message);
         setMessages((current) =>
-          current.map((message) => message.id === id ? { ...message, streamText: streamed } : message)
+          current.map((message) => message.id === id ? { ...message, streamText: renderStream() } : message)
         );
       });
       const answer = String(finalPayload?.response || streamed || "");
       setMessages((current) =>
         current.map((message) =>
-          message.id === id ? { ...message, status: "done", result: buildAgentResult(text, answer, 0), streamText: "" } : message
+          message.id === id ? { ...message, status: "done", result: buildAgentResult(text, answer, 0, finalPayload), streamText: "" } : message
         )
       );
     } catch (error) {

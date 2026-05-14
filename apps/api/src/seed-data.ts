@@ -318,7 +318,7 @@ export function createSeedState(): PlatformState {
           {
             id: "prompt_agent_chat_v1",
             version: 1,
-            body: "Agent: {{agent}}\nUser question: {{user_message}}\n\nAnswer in the user's language. Be concise, practical, and explicit about any platform action or approval that would be required. If you need data execution, explain the safe next step rather than inventing results.",
+            body: "Agent: {{agent}}\nInstructions: {{agent_instructions}}\nIntent: {{intent}}\nSelected tool: {{tool_key}}\nUser question: {{user_message}}\nTool summary: {{tool_summary}}\nTool result JSON: {{tool_result}}\n\nAnswer in the user's language. Use only the supplied tool result when discussing data. If there is no tool result, answer briefly or ask one clear clarification question. Never claim a workflow/action was executed unless the tool result says it completed. If approval is required, say it is pending approval.",
             createdAt: now
           }
         ]
@@ -347,9 +347,9 @@ export function createSeedState(): PlatformState {
       {
         id: "agent_risk",
         tenantId: DEFAULT_TENANT_ID,
-        name: "Risk Analyst",
+        name: "Banking Analyst Orchestrator",
         templateId: "agent_template_5",
-        instructions: "Analyze risk metrics, cite evidence, and request approval before risky action execution.",
+        instructions: "Classify banking questions, run only governed read tools automatically, cite evidence, and request human approval before risky workflow actions.",
         enabled: true
       }
     ],
@@ -358,14 +358,19 @@ export function createSeedState(): PlatformState {
       { id: "tool_rag", key: "rag.retrieve", name: "Retrieve indexed evidence", riskLevel: "low" },
       { id: "tool_jira", key: "jira.create_ticket", name: "Create Jira ticket", riskLevel: "high" },
       { id: "tool_market", key: "market.compare", name: "Compare market intelligence", riskLevel: "medium" },
+      { id: "tool_simulation", key: "simulation.run", name: "Run sandbox simulation", riskLevel: "medium" },
       { id: "tool_alerts", key: "alerts.route", name: "Route alert", riskLevel: "high" }
     ],
     toolPermissions: [
       { id: "tp_admin_query", tenantId: DEFAULT_TENANT_ID, roleName: "Admin", toolKey: "query.run", allowed: true, requiresApproval: false },
       { id: "tp_admin_rag", tenantId: DEFAULT_TENANT_ID, roleName: "Admin", toolKey: "rag.retrieve", allowed: true, requiresApproval: false },
       { id: "tp_admin_jira", tenantId: DEFAULT_TENANT_ID, roleName: "Admin", toolKey: "jira.create_ticket", allowed: true, requiresApproval: true },
+      { id: "tp_admin_market", tenantId: DEFAULT_TENANT_ID, roleName: "Admin", toolKey: "market.compare", allowed: true, requiresApproval: false },
+      { id: "tp_admin_simulation", tenantId: DEFAULT_TENANT_ID, roleName: "Admin", toolKey: "simulation.run", allowed: true, requiresApproval: false },
       { id: "tp_analyst_query", tenantId: DEFAULT_TENANT_ID, roleName: "Analyst", toolKey: "query.run", allowed: true, requiresApproval: false },
       { id: "tp_analyst_rag", tenantId: DEFAULT_TENANT_ID, roleName: "Analyst", toolKey: "rag.retrieve", allowed: true, requiresApproval: false },
+      { id: "tp_analyst_market", tenantId: DEFAULT_TENANT_ID, roleName: "Analyst", toolKey: "market.compare", allowed: true, requiresApproval: false },
+      { id: "tp_analyst_simulation", tenantId: DEFAULT_TENANT_ID, roleName: "Analyst", toolKey: "simulation.run", allowed: true, requiresApproval: false },
       { id: "tp_operator_alerts", tenantId: DEFAULT_TENANT_ID, roleName: "Operator", toolKey: "alerts.route", allowed: true, requiresApproval: true }
     ],
     agentExecutionTraces: [],

@@ -90,6 +90,12 @@ export class MarketIntelligenceService {
   }
 
   compare(context: RequestContext): JsonRecord {
+    safetyGateService.assertAllowed(context, {
+      tenantId: context.tenantId,
+      operationType: "service",
+      operationId: createId("market_compare"),
+      requiredPermission: permissions.marketRead
+    });
     const latestJob = this.repository.snapshot().externalIngestionJobs.find((job) => job.tenantId === context.tenantId && job.status === "SUCCEEDED");
     return {
       internal: {
