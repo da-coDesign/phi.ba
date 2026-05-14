@@ -157,8 +157,52 @@ describe("enterprise safety controls", () => {
 
     expect(final.status).toBe("completed");
     expect(final.result.mode).toBe("data_card");
-    expect(final.result.sql).toContain("v_customer_360");
+    expect(final.result.sql).toContain("v_dataset_summary");
+    expect(final.response).toContain("2.500");
     expect(final.result.toolCalls[0]?.toolKey).toBe("query.run");
+  });
+
+  it("answers FBDWHPRD customer counts without an OpenAI key by using guarded SQL", async () => {
+    const previousProvider = process.env.LLM_PROVIDER;
+    const previousModel = process.env.LLM_MODEL;
+    const previousTextToSqlMode = process.env.TEXT_TO_SQL_MODE;
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.LLM_PROVIDER = "openai";
+    process.env.LLM_MODEL = "gpt-5.4-mini";
+    process.env.TEXT_TO_SQL_MODE = "llm";
+    delete process.env.OPENAI_API_KEY;
+    store.updateTenantConfig("tenant_fibabanka", {
+      modelPolicy: {
+        provider: "openai",
+        allowedModels: ["gpt-5.4-mini"],
+        piiMode: "mask_required"
+      }
+    });
+
+    let final: any;
+    try {
+      for await (const chunk of agentService.streamExecute(context(), {
+        agentId: "agent_risk",
+        message: "kaç müşteri var bu veri setinde?",
+        connectorId: "connector_pg_reporting"
+      })) {
+        if (chunk.event === "done") final = chunk.data;
+      }
+    } finally {
+      process.env.LLM_PROVIDER = previousProvider;
+      process.env.LLM_MODEL = previousModel;
+      process.env.TEXT_TO_SQL_MODE = previousTextToSqlMode;
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    }
+
+    expect(final.status).toBe("completed");
+    expect(final.response).toContain("2.500");
+    expect(final.result.sql).toContain("v_dataset_summary");
+    expect(final.result.raw.result.rows[0].row_count).toBe(2500);
   });
 
   it("routes broad banking topics to allowlisted reporting views", () => {

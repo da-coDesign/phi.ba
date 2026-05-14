@@ -39,6 +39,16 @@ export class TextToSqlService {
   generateSql(question: string): { sql: string; confidenceScore: number; language: "tr" | "en" } {
     const normalized = question.toLocaleLowerCase("tr-TR");
     const language = /[ıİşŞğĞüÜöÖçÇ]/.test(question) ? "tr" : "en";
+    if (isCustomerCountQuestion(normalized)) {
+      return {
+        language,
+        confidenceScore: 0.9,
+        sql: `SELECT metric_name, row_count, description
+FROM v_dataset_summary
+WHERE metric_name = 'customers'
+LIMIT 1`
+      };
+    }
     if (/şikayet|sikayet|complaint|servis|hizmet|çözüm|cozum|nps/.test(normalized)) {
       return {
         language,
@@ -162,7 +172,10 @@ LIMIT 10`
   async *askStream(context: RequestContext, input: NaturalLanguageQueryInput): AsyncIterable<TextToSqlStreamEvent> {
     const connector = this.resolveConnector(context, input.connectorId);
     let generated: { sql: string; confidenceScore: number; language: "tr" | "en"; generator: "openai" | "template" };
-    if (process.env.TEXT_TO_SQL_MODE === "template") {
+    const shouldUseTemplate = process.env.TEXT_TO_SQL_MODE === "template" ||
+      !hasOpenAiCredential(context) ||
+      isCustomerCountQuestion(input.question.toLocaleLowerCase("tr-TR"));
+    if (shouldUseTemplate) {
       generated = { ...this.generateSql(input.question), generator: "template" };
       for (const token of splitSqlForStreaming(generated.sql)) {
         yield { event: "sql_delta", data: { token } };
@@ -317,6 +330,7 @@ function buildBusinessContext(): string {
     "Tahsilat icin v_collections_snapshot kullan.",
     "Rakip faiz ve market karsilastirmasi icin v_market_rate_comparison kullan.",
     "Genel islem hacmi icin v_transaction_volume kullan.",
+    "Veri seti kayit sayilari ve 'kac musteri var' sorulari icin v_dataset_summary kullan.",
     "Musteri segment ve bakiye ozetleri icin v_customer_360 kullan."
   ].join("\n");
 }
@@ -332,4 +346,13 @@ function normalizeGeneratedSql(text: string): string {
 
 function splitSqlForStreaming(sql: string): string[] {
   return sql.split(/(\s+|,\s*)/).filter(Boolean);
+}
+
+function hasOpenAiCredential(context: RequestContext): boolean {
+  return Boolean(process.env.OPENAI_API_KEY || context.openAiApiKey);
+}
+
+function isCustomerCountQuestion(normalizedQuestion: string): boolean {
+  return /(?:kaç|kac|sayı|sayısı|sayisi|adet|count).*(?:müşteri|musteri|customer)/.test(normalizedQuestion) ||
+    /(?:müşteri|musteri|customer).*(?:kaç|kac|sayı|sayısı|sayisi|adet|count)/.test(normalizedQuestion);
 }

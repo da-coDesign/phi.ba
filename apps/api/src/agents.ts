@@ -148,7 +148,7 @@ export class AgentService {
         boardable: false
       };
     } else if (decision.intent === "data_query") {
-      yield { event: "progress", data: { message: "LLM SQL planı üretiyor", toolKey: "query.run" } };
+      yield { event: "progress", data: { message: "SQL planı hazırlanıyor", toolKey: "query.run" } };
       let query: SqlGenerationResult | undefined;
       for await (const chunk of textToSqlService.askStream(context, { question: input.message, connectorId: input.connectorId, execute: true, maskingEnabled: true })) {
         if (chunk.event === "sql_delta") yield { event: "sql_delta", data: chunk.data };
@@ -314,6 +314,20 @@ export class AgentService {
 
   private async *streamFinalAnswer(context: RequestContext, agent: Agent, message: string, decision: AgentDecision, toolResult: AgentToolResult, model: string): AsyncIterable<string> {
     if (toolResult.mode === "clarification") {
+      for await (const token of tokenize(toolResult.answer)) {
+        yield token;
+      }
+      return;
+    }
+
+    if (toolResult.sql?.includes("v_dataset_summary") && toolResult.answer) {
+      for await (const token of tokenize(toolResult.answer)) {
+        yield token;
+      }
+      return;
+    }
+
+    if (!hasModelCredential(context) && toolResult.answer) {
       for await (const token of tokenize(toolResult.answer)) {
         yield token;
       }
@@ -489,6 +503,9 @@ function buildDataToolResult(message: string, query: SqlGenerationResult): Agent
 function buildDataAnswer(rows: JsonRecord[], confidenceScore: number, query: JsonRecord): string {
   const lead = rows[0];
   if (!lead) return "Güvenli read-only sorgu çalıştı ancak sonuç dönmedi.";
+  if (lead.metric_name === "customers" && typeof lead.row_count === "number") {
+    return `FBDWHPRD sentetik veri setinde ${lead.row_count.toLocaleString("tr-TR")} müşteri kaydı var.`;
+  }
   const leadText = Object.values(lead).slice(0, 2).join(" / ");
   const result = typeof query.result === "object" && query.result ? query.result as JsonRecord : {};
   const source = String(result.source ?? result.mode ?? "connector");
@@ -517,6 +534,10 @@ function trimToolResultForPrompt(result: AgentToolResult): JsonRecord {
     citations: result.citations?.slice(0, 3),
     approvalRequestId: result.approvalRequestId
   };
+}
+
+function hasModelCredential(context: RequestContext): boolean {
+  return process.env.LLM_PROVIDER === "data-grounded-local" || Boolean(process.env.OPENAI_API_KEY || context.openAiApiKey);
 }
 
 function extractRate(message: string): number | undefined {

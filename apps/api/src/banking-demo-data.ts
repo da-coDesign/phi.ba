@@ -40,6 +40,7 @@ export const BANKING_BASE_TABLES = [
 ] as const;
 
 export const BANKING_REPORTING_VIEWS = [
+  "v_dataset_summary",
   "v_customer_360",
   "v_transaction_volume",
   "v_card_approval_daily",
@@ -90,6 +91,7 @@ export const BANKING_ALLOWED_COLUMNS: Record<string, string[]> = {
   v_fraud_alerts: ["fraud_type", "severity", "alert_count", "confirmed_count", "amount_at_risk_try", "confirmed_amount_try"],
   v_collections_snapshot: ["segment", "bucket", "case_count", "exposure_try", "recovered_try", "recovery_rate_pct", "promise_to_pay_count"],
   v_market_rate_comparison: ["rate_date", "competitor", "product_name", "interest_rate_pct", "internal_rate_pct", "spread_bps", "confidence_score"],
+  v_dataset_summary: ["metric_name", "row_count", "description"],
   islemler: ["id", "musteri_id", "urun_id", "tutar", "durum", "gerceklesme_tarihi"],
   musteriler: ["id", "segment", "edinim_kanali"],
   urunler: ["id", "ad", "kategori"],
@@ -99,6 +101,7 @@ export const BANKING_ALLOWED_COLUMNS: Record<string, string[]> = {
 };
 
 type FallbackTopic =
+  | "dataset"
   | "card"
   | "risk"
   | "mobile"
@@ -112,6 +115,11 @@ type FallbackTopic =
   | "transactions";
 
 const fallbackRows: Record<FallbackTopic, JsonRecord[]> = {
+  dataset: [
+    { metric_name: "customers", row_count: BANKING_DEMO_ROW_COUNTS.customers, description: "Synthetic banking demo customer records in FBDWHPRD." },
+    { metric_name: "accounts", row_count: BANKING_DEMO_ROW_COUNTS.accounts, description: "Synthetic banking demo account records in FBDWHPRD." },
+    { metric_name: "transactions", row_count: BANKING_DEMO_ROW_COUNTS.transactions, description: "Synthetic banking demo transaction records in FBDWHPRD." }
+  ],
   card: [
     { report_date: "2026-05-13", channel: "Sanal POS", segment: "Mass", decline_reason: "insufficient_limit", txn_count: 8420, txn_volume_try: 18420000, approval_rate_pct: 71.8, rejected_txn_count: 2374, lost_volume_try: 5420000 },
     { report_date: "2026-05-13", channel: "Mobile Wallet", segment: "Young", decline_reason: "issuer_timeout", txn_count: 6110, txn_volume_try: 9240000, approval_rate_pct: 76.4, rejected_txn_count: 1442, lost_volume_try: 2110000 },
@@ -188,6 +196,7 @@ export function describeBankingDemoDataset(): JsonRecord {
 
 function detectFallbackTopic(sql: string): FallbackTopic {
   const normalized = sql.toLocaleLowerCase("tr-TR");
+  if (/v_dataset_summary|metric_name|row_count|count\s*\(\s*\*\s*\).*bank_customers|bank_customers[\s\S]*count\s*\(/.test(normalized)) return "dataset";
   if (/v_card_approval_daily|card_transactions|kart_islemleri|approval|onay|decline/.test(normalized)) return "card";
   if (/v_credit_risk_snapshot|loan_portfolio|risk_monitoring|risk_izleme|npl|overdue|dpd/.test(normalized)) return "risk";
   if (/v_mobile_retention|mobile_retention|digital_sessions|mobil_kullanim|retention|cohort/.test(normalized)) return "mobile";
