@@ -317,7 +317,7 @@ export function createSeedState(): PlatformState {
           {
             id: "prompt_agent_chat_v1",
             version: 1,
-            body: "Agent: {{agent}}\nInstructions: {{agent_instructions}}\nIntent: {{intent}}\nSelected tool: {{tool_key}}\nUser question: {{user_message}}\nTool summary: {{tool_summary}}\nTool result JSON: {{tool_result}}\n\nAnswer in the user's language. Use only the supplied tool result when discussing data. If there is no tool result, answer briefly or ask one clear clarification question. Never claim a workflow/action was executed unless the tool result says it completed. If approval is required, say it is pending approval.",
+            body: "Agent: {{agent}}\nInstructions: {{agent_instructions}}\nIntent: {{intent}}\nSelected tool: {{tool_key}}\nUser question: {{user_message}}\nTool summary: {{tool_summary}}\nTool result JSON: {{tool_result}}\nConversation context JSON: {{conversation_context}}\n\nAnswer in the user's language. Use the current tool result first. If the user asks a follow-up about this/that data, use the conversation context as prior evidence instead of saying the tool output is empty. When explaining data, give a concise interpretation, key evidence, and what cannot be inferred from the shown rows. Do not expose hidden chain-of-thought; provide a brief business rationale instead. Never claim a workflow/action was executed unless the tool result says it completed. If approval is required, say it is pending approval.",
             createdAt: now
           }
         ]

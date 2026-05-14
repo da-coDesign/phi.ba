@@ -223,6 +223,41 @@ function buildAgentResult(question, answer, finalPayload) {
   };
 }
 
+function compactText(value, limit = 1200) {
+  const text = String(value || "").trim();
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function buildConversationContext(messages) {
+  return messages
+    .filter((message) => message.status === "done" && message.result)
+    .slice(-4)
+    .map((message) => {
+      const result = message.result;
+      const columns = Array.isArray(result.columns) ? result.columns : [];
+      const rows = Array.isArray(result.rows) ? result.rows : [];
+      const stats = Array.isArray(result.stats) ? result.stats : [];
+      return {
+        question: compactText(message.text, 500),
+        answer: compactText(result.agentAnswer || result.intro || result.insight, 1200),
+        mode: result.mode || "text",
+        sql: compactText(result.sql || "", 1200),
+        tables: Array.isArray(result.tables) ? result.tables.slice(0, 5) : [],
+        columns: columns.slice(0, 12).map((column) => ({
+          key: column.key || column.label,
+          label: column.label,
+          type: column.type
+        })),
+        rows: rows.slice(0, 10).map((row) => Array.isArray(row) ? row.slice(0, 12) : row),
+        stats: stats.slice(0, 6).map((stat) => ({
+          label: stat.label,
+          type: stat.type,
+          value: stat.value
+        }))
+      };
+    });
+}
+
 function inferResultCategory(question, result) {
   const text = `${question} ${result?.toolKey || ""}`.toLocaleLowerCase("tr-TR");
   if (/npl|risk|onay|approval|düştü|dustu|fraud|şikayet|sikayet|tahsilat|jira/.test(text)) return "ops";
@@ -259,12 +294,12 @@ function buildStatsFromServerRows(rows, columns) {
     }));
 }
 
-async function streamAgentAnswer(question, source, onEvent) {
+async function streamAgentAnswer(question, source, onEvent, conversationContext = []) {
   const selectedSource = DATA_SOURCES.find((item) => item.label === source) || DATA_SOURCES.find((item) => item.label === DEFAULT_DATA_SOURCE) || DATA_SOURCES[0];
   const response = await fetch(`${API_BASE}/api/v1/agents/${DEFAULT_AGENT_ID}/stream`, {
     method: "POST",
     headers: buildApiHeaders(),
-    body: JSON.stringify({ message: question, connectorId: selectedSource.connectorId, dataSource: selectedSource.label })
+    body: JSON.stringify({ message: question, connectorId: selectedSource.connectorId, dataSource: selectedSource.label, conversationContext })
   });
   if (!response.ok || !response.body) throw new Error(`Agent stream failed (${response.status})`);
 
@@ -384,7 +419,7 @@ function readStoredBoardItems() {
 }
 
 async function refreshBoardItemData(item, source) {
-  const finalPayload = await streamAgentAnswer(item.queryText, item.source || source || DEFAULT_DATA_SOURCE, () => {});
+  const finalPayload = await streamAgentAnswer(item.queryText, item.source || source || DEFAULT_DATA_SOURCE, () => {}, []);
   const answer = String(finalPayload?.response || "");
   const nextResult = buildAgentResult(item.queryText, answer, finalPayload);
   if (!nextResult.rows.length || !nextResult.columns.length) {
@@ -1378,6 +1413,7 @@ function App() {
 
   const ask = async (text) => {
     const id = createId("msg");
+    const conversationContext = buildConversationContext(messages);
     setMessages((current) => [...current, { id, text, status: "thinking", result: null, savedToBoard: false, streamText: "" }]);
     setView("convo");
     setSidebarOpen(true);
@@ -1402,7 +1438,7 @@ function App() {
         setMessages((current) =>
           current.map((message) => message.id === id ? { ...message, streamText: renderStream() } : message)
         );
-      });
+      }, conversationContext);
       const answer = String(finalPayload?.response || streamed || "");
       setMessages((current) =>
         current.map((message) =>

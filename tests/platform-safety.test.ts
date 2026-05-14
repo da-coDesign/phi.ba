@@ -46,6 +46,10 @@ function buildTestProviderText(variables: Record<string, unknown>): string {
   const toolSummary = String(variables.tool_summary ?? "");
   if (toolSummary) return toolSummary;
   const userMessage = String(variables.user_message ?? "");
+  const conversationContext = String(variables.conversation_context ?? "");
+  if (conversationContext && /(bu data|bu veri|ne demek|yorumla|açıkla|acikla)/i.test(userMessage)) {
+    return "Bu veri önceki sorgudaki segment bazlı işlem hacmini açıklıyor.";
+  }
   return userMessage ? `Test provider response for: ${userMessage}` : "Test provider response.";
 }
 
@@ -232,6 +236,35 @@ describe("enterprise safety controls", () => {
     expect(classifyAgentIntent("email kampanya dönüşümü nasıl?")).toBe("data_query");
     expect(classifyAgentIntent("şube performansını açabilir misin?")).toBe("data_query");
     expect(classifyAgentIntent("bu metrik için aksiyon al")).toBe("action_request");
+  });
+
+  it("answers ambiguous data explanation follow-ups from prior card context", async () => {
+    let final: any;
+    for await (const chunk of agentService.streamExecute(context(), {
+      agentId: "agent_risk",
+      message: "bu data ne demek oluyor?",
+      conversationContext: [{
+        question: "Son 30 günde işlem hacmine göre en çok kullanılan 10 segment",
+        answer: "Son 30 günde işlem hacmine göre en çok kullanılan 10 segment için sorgu çalıştırıldı.",
+        mode: "data_card",
+        sql: "SELECT segment, txn_volume_try FROM v_transaction_volume ORDER BY txn_volume_try DESC LIMIT 10",
+        columns: [
+          { key: "segment", label: "segment", type: "text" },
+          { key: "txn_volume_try", label: "txn volume try", type: "currency" }
+        ],
+        rows: [
+          ["Mass", 4271318.72],
+          ["SME", 2745124.39]
+        ]
+      }]
+    })) {
+      if (chunk.event === "done") final = chunk.data;
+    }
+
+    expect(final.status).toBe("completed");
+    expect(final.result.mode).toBe("text");
+    expect(final.result.toolCalls).toHaveLength(0);
+    expect(final.response).toContain("segment bazlı işlem hacmini");
   });
 
   it("returns card-ready data for metric questions through the central agent", async () => {

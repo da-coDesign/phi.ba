@@ -47,6 +47,26 @@ interface AgentToolResult {
   raw?: JsonRecord;
 }
 
+interface AgentConversationTurn {
+  question: string;
+  answer: string;
+  mode: string;
+  sql?: string;
+  tables?: string[];
+  columns?: Array<{ key?: string; label: string; type?: string; align?: "right" }>;
+  rows?: unknown[][];
+  stats?: Array<{ label: string; type?: string; value?: unknown }>;
+}
+
+interface AgentExecuteInput {
+  agentId: string;
+  message: string;
+  toolKey?: string;
+  approvalId?: string;
+  connectorId?: string;
+  conversationContext?: unknown;
+}
+
 export class ToolRegistry {
   constructor(private readonly repository: PlatformStore) {}
 
@@ -76,7 +96,7 @@ export class AgentService {
     return this.repository.snapshot().agents.filter((agent) => agent.tenantId === context.tenantId);
   }
 
-  async execute(context: RequestContext, input: { agentId: string; message: string; toolKey?: string; approvalId?: string; connectorId?: string }): Promise<JsonRecord> {
+  async execute(context: RequestContext, input: AgentExecuteInput): Promise<JsonRecord> {
     let final: JsonRecord | undefined;
     for await (const chunk of this.streamExecute(context, input)) {
       if (chunk.event === "done") final = chunk.data;
@@ -85,11 +105,13 @@ export class AgentService {
     return final;
   }
 
-  async *streamExecute(context: RequestContext, input: { agentId: string; message: string; toolKey?: string; approvalId?: string; connectorId?: string }): AsyncIterable<{ event: AgentStreamEvent; data: JsonRecord }> {
+  async *streamExecute(context: RequestContext, input: AgentExecuteInput): AsyncIterable<{ event: AgentStreamEvent; data: JsonRecord }> {
     const agent = this.repository.snapshot().agents.find((item) => item.tenantId === context.tenantId && item.id === input.agentId);
     if (!agent || !agent.enabled) throw blocked(`Agent ${input.agentId} is not available`);
 
-    const decision = decideAgentPath(input.message, input.toolKey);
+    const conversationContext = normalizeConversationContext(input.conversationContext);
+    const initialDecision = decideAgentPath(input.message, input.toolKey);
+    const decision = refineDecisionWithConversation(input.message, initialDecision, conversationContext, input.toolKey);
     const operationId = createId("agent_run");
     const model = process.env.LLM_MODEL ?? "gpt-5.4-mini";
     const selectedTool = decision.toolKey ? this.tools.get(decision.toolKey) : undefined;
@@ -102,7 +124,7 @@ export class AgentService {
       toolKey: decision.toolKey,
       riskLevel: selectedTool?.riskLevel ?? decision.riskLevel,
       approvalId: input.approvalId,
-      payload: { message: input.message, intent: decision.intent, connectorId: input.connectorId }
+      payload: { message: input.message, intent: decision.intent, connectorId: input.connectorId, conversationContext: summarizeConversationContext(conversationContext) }
     });
     const blockers = safetyRuns.filter((run) => run.status === "BLOCKED");
     if (blockers.length > 0) {
@@ -124,7 +146,7 @@ export class AgentService {
         };
         const trace = this.appendTrace(context, {
           agentId: agent.id,
-          input: { message: input.message, decision },
+          input: { message: input.message, decision, conversationContext: summarizeConversationContext(conversationContext) },
           output: result as unknown as JsonRecord,
           toolCalls: result.toolCalls,
           safetyStatus: "BLOCKED",
@@ -150,7 +172,8 @@ export class AgentService {
     } else if (decision.intent === "data_query") {
       yield { event: "progress", data: { message: "SQL planı hazırlanıyor", toolKey: "query.run" } };
       let query: SqlGenerationResult | undefined;
-      for await (const chunk of textToSqlService.askStream(context, { question: input.message, connectorId: input.connectorId, execute: true, maskingEnabled: true })) {
+      const dataQuestion = buildContextualDataQuestion(input.message, conversationContext);
+      for await (const chunk of textToSqlService.askStream(context, { question: dataQuestion, connectorId: input.connectorId, execute: true, maskingEnabled: true })) {
         if (chunk.event === "sql_delta") yield { event: "sql_delta", data: chunk.data };
         if (chunk.event === "sql_done") yield { event: "sql_done", data: chunk.data };
         if (chunk.event === "done") query = chunk.data as unknown as SqlGenerationResult;
@@ -172,7 +195,7 @@ export class AgentService {
     }
 
     let response = "";
-    for await (const token of this.streamFinalAnswer(context, agent, input.message, decision, toolResult, model)) {
+    for await (const token of this.streamFinalAnswer(context, agent, input.message, decision, toolResult, model, conversationContext)) {
       response += token;
       yield { event: "token", data: { token } };
     }
@@ -182,7 +205,7 @@ export class AgentService {
     };
     const trace = this.appendTrace(context, {
       agentId: agent.id,
-      input: { message: input.message, decision },
+      input: { message: input.message, decision, conversationContext: summarizeConversationContext(conversationContext) },
       output: finalResult as unknown as JsonRecord,
       toolCalls: finalResult.toolCalls,
       safetyStatus: "PASS",
@@ -312,7 +335,7 @@ export class AgentService {
     return { mode: "text", answer: "", toolCalls: [], boardable: false };
   }
 
-  private async *streamFinalAnswer(context: RequestContext, agent: Agent, message: string, decision: AgentDecision, toolResult: AgentToolResult, model: string): AsyncIterable<string> {
+  private async *streamFinalAnswer(context: RequestContext, agent: Agent, message: string, decision: AgentDecision, toolResult: AgentToolResult, model: string, conversationContext: AgentConversationTurn[]): AsyncIterable<string> {
     if (toolResult.mode === "clarification") {
       for await (const token of tokenize(toolResult.answer)) {
         yield token;
@@ -332,7 +355,8 @@ export class AgentService {
         intent: decision.intent,
         tool_key: decision.toolKey ?? "none",
         tool_summary: toolResult.answer,
-        tool_result: JSON.stringify(trimToolResultForPrompt(toolResult))
+        tool_result: JSON.stringify(trimToolResultForPrompt(toolResult)),
+        conversation_context: JSON.stringify(conversationContext)
       },
       piiMasked: true
     })) {
@@ -384,6 +408,166 @@ export class AgentService {
     this.repository.snapshot().agentExecutionTraces.unshift(trace);
     return trace;
   }
+}
+
+function normalizeConversationContext(value: unknown): AgentConversationTurn[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(-4)
+    .map(normalizeConversationTurn)
+    .filter((turn): turn is AgentConversationTurn => Boolean(turn));
+}
+
+function normalizeConversationTurn(value: unknown): AgentConversationTurn | undefined {
+  if (!isRecord(value)) return undefined;
+  const columns = normalizeConversationColumns(value.columns);
+  const rows = normalizeConversationRows(value.rows);
+  const stats = normalizeConversationStats(value.stats);
+  const turn: AgentConversationTurn = {
+    question: trimString(value.question, 500),
+    answer: trimString(value.answer, 1200),
+    mode: trimString(value.mode, 40) || "text",
+    sql: trimString(value.sql, 1200),
+    tables: normalizeStringList(value.tables, 5, 80),
+    columns,
+    rows,
+    stats
+  };
+  if (!turn.question && !turn.answer && !turn.sql && !turn.rows?.length) return undefined;
+  return turn;
+}
+
+function refineDecisionWithConversation(message: string, decision: AgentDecision, conversationContext: AgentConversationTurn[], explicitToolKey?: string): AgentDecision {
+  if (explicitToolKey || !latestDataTurn(conversationContext)) return decision;
+  if (asksForContextualDataTransformation(message)) {
+    return {
+      intent: "data_query",
+      toolKey: "query.run",
+      riskLevel: "medium",
+      mode: "data_card",
+      reason: "Contextual follow-up asks to reshape the prior data result."
+    };
+  }
+  if (decision.intent === "clarification_needed" && isContextualExplanationFollowUp(message)) {
+    return {
+      intent: "direct_answer",
+      riskLevel: "low",
+      mode: "text",
+      reason: "Short follow-up can be answered from prior conversation data context."
+    };
+  }
+  return decision;
+}
+
+function buildContextualDataQuestion(message: string, conversationContext: AgentConversationTurn[]): string {
+  const latest = latestDataTurn(conversationContext);
+  if (!latest || !shouldUsePriorDataContext(message)) return message;
+  const parts = [
+    "Previous analytics context:",
+    latest.question ? `Previous user question: ${latest.question}` : "",
+    latest.sql ? `Previous SQL: ${latest.sql}` : "",
+    latest.columns?.length ? `Previous columns: ${latest.columns.map((column) => column.key || column.label).join(", ")}` : "",
+    latest.rows?.length ? `Previous sample rows: ${JSON.stringify(latest.rows.slice(0, 5))}` : "",
+    `Follow-up request: ${message}`,
+    "Generate a new safe PostgreSQL SELECT for the follow-up. Preserve the previous metric and domain unless the follow-up explicitly changes them."
+  ];
+  return parts.filter(Boolean).join("\n");
+}
+
+function summarizeConversationContext(conversationContext: AgentConversationTurn[]): JsonRecord[] {
+  return conversationContext.map((turn) => ({
+    question: turn.question,
+    mode: turn.mode,
+    sql: turn.sql,
+    columns: turn.columns?.map((column) => column.key || column.label),
+    rowCount: turn.rows?.length ?? 0
+  }));
+}
+
+function latestDataTurn(conversationContext: AgentConversationTurn[]): AgentConversationTurn | undefined {
+  return [...conversationContext].reverse().find((turn) => Boolean(turn.sql || turn.columns?.length || turn.rows?.length));
+}
+
+function asksForContextualDataTransformation(message: string): boolean {
+  const normalized = message.toLocaleLowerCase("tr-TR");
+  return hasDataTransformationTerm(normalized) && shouldUsePriorDataContext(normalized);
+}
+
+function shouldUsePriorDataContext(message: string): boolean {
+  const normalized = message.toLocaleLowerCase("tr-TR").trim();
+  return isContextualReference(normalized) || (hasDataTransformationTerm(normalized) && normalized.split(/\s+/).length <= 6);
+}
+
+function hasDataTransformationTerm(normalized: string): boolean {
+  return /(haftalık|haftalik|günlük|gunluk|aylık|aylik|çeyrek|ceyrek|kırılım|kirilim|ayır|ayir|böl|bol|breakdown|trend|zaman|kanal|segment|ürün|urun|liste|sırala|sirala|top|filtrele|sadece|grafik|tablo|karşılaştır|karsilastir)/.test(normalized);
+}
+
+function isContextualExplanationFollowUp(message: string): boolean {
+  const normalized = message.toLocaleLowerCase("tr-TR").trim();
+  return isContextualReference(normalized) ||
+    /^(neden|niye|nasıl|nasil|ne demek|yorumla|açıkla|acikla)\??$/.test(normalized);
+}
+
+function isContextualReference(message: string): boolean {
+  const normalized = message.toLocaleLowerCase("tr-TR");
+  return /(^|\s)(bu|bunu|şu|su|şunu|sunu|onu|buradaki|yukarıdaki|yukaridaki|önceki|onceki|data|datayı|datayi|veri|veriyi|sonuç|sonuc|sonucu|tablo|tabloyu|grafik|grafiği|grafigi|çıktı|cikti|çıktıyı|ciktiyi|bunlar)(\s|$)/.test(normalized);
+}
+
+function normalizeConversationColumns(value: unknown): AgentConversationTurn["columns"] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 12).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const label = trimString(item.label, 80) || trimString(item.key, 80);
+    if (!label) return [];
+    return [{
+      key: trimString(item.key, 80) || undefined,
+      label,
+      type: trimString(item.type, 40) || "text",
+      align: item.align === "right" ? "right" as const : undefined
+    }];
+  });
+}
+
+function normalizeConversationRows(value: unknown): unknown[][] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(Array.isArray)
+    .slice(0, 10)
+    .map((row) => row.slice(0, 12).map(normalizeConversationCell));
+}
+
+function normalizeConversationStats(value: unknown): AgentConversationTurn["stats"] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 6).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const label = trimString(item.label, 80);
+    if (!label) return [];
+    return [{
+      label,
+      type: trimString(item.type, 40) || "count",
+      value: normalizeConversationCell(item.value)
+    }];
+  });
+}
+
+function normalizeStringList(value: unknown, limit: number, itemLimit: number): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => trimString(item, itemLimit)).filter(Boolean).slice(0, limit);
+}
+
+function normalizeConversationCell(value: unknown): unknown {
+  if (value === null || typeof value === "number" || typeof value === "boolean") return value;
+  return trimString(value, 240);
+}
+
+function trimString(value: unknown, limit: number): string {
+  if (value === undefined || value === null) return "";
+  const text = String(value).trim();
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function classifyAgentIntent(message: string): AgentIntent {
