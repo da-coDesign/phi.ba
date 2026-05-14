@@ -10,9 +10,17 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 } /*EDITMODE-END*/;
 
 const STORAGE_KEYS = {
-  boards: "phi.ba.board-items.v1"
+  boards: "phi.ba.board-items.v1",
+  source: "phi.ba.selected-source.v1"
 };
 
+const DATA_SOURCES = [
+  { label: "FBCAPRD", connectorId: "connector_pg_reporting", mode: "core synthetic" },
+  { label: "FBDWHPRD", connectorId: "connector_pg_reporting", mode: "synthetic banking demo" },
+  { label: "FBDWH", connectorId: "connector_pg_reporting", mode: "warehouse synthetic" },
+  { label: "FBDWHPRD_CDO", connectorId: "connector_pg_reporting", mode: "cdo synthetic" }
+];
+const DEFAULT_DATA_SOURCE = "FBDWHPRD";
 const OPENAI_KEY_STORAGE = "phi.ba.openai-api-key.v1";
 const API_BASE = window.PHI_BA_API_BASE_URL || (window.location.hostname === "localhost" ? "http://localhost:4000" : window.location.origin);
 function buildApiHeaders() {
@@ -507,11 +515,12 @@ function buildStatsFromServerRows(rows, columns) {
     }));
 }
 
-async function streamAgentAnswer(question, onEvent) {
+async function streamAgentAnswer(question, source, onEvent) {
+  const selectedSource = DATA_SOURCES.find((item) => item.label === source) || DATA_SOURCES.find((item) => item.label === DEFAULT_DATA_SOURCE) || DATA_SOURCES[0];
   const response = await fetch(`${API_BASE}/api/v1/agents/${DEFAULT_AGENT_ID}/stream`, {
     method: "POST",
     headers: buildApiHeaders(),
-    body: JSON.stringify({ message: question })
+    body: JSON.stringify({ message: question, connectorId: selectedSource.connectorId, dataSource: selectedSource.label })
   });
   if (!response.ok || !response.body) throw new Error(`Agent stream failed (${response.status})`);
 
@@ -823,7 +832,7 @@ function SidebarFull({
 }
 
 // ---------- Ask Box ----------
-function AskBox({ value, onChange, onSubmit, big, placeholder, chips, onConfigureKey, hasOpenAiKey }) {
+function AskBox({ value, onChange, onSubmit, big, placeholder, chips, selectedSource, onSelectSource, onConfigureKey, hasOpenAiKey }) {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -850,8 +859,19 @@ function AskBox({ value, onChange, onSubmit, big, placeholder, chips, onConfigur
 
       <div className="askbox-row">
         <div className="askbox-chips">
-          {(chips || ["FBCAPRD", "FBDWHPRD", "FBDWH", "FBDWHPRD_CDO"]).map((chip) =>
-            <button key={chip} className="chip"><Icon name="db" size={11} /><span>{chip}</span></button>
+          {(chips || DATA_SOURCES).map((source) => {
+            const item = typeof source === "string" ? DATA_SOURCES.find((entry) => entry.label === source) || { label: source, mode: "" } : source;
+            return (
+              <button
+                key={item.label}
+                className={"chip" + (selectedSource === item.label ? " active" : "")}
+                onClick={() => onSelectSource?.(item.label)}
+                title={item.mode || item.label}>
+                <Icon name="db" size={11} />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
           )}
           <button className="chip chip-add"><Icon name="plus" size={11} /></button>
         </div>
@@ -872,7 +892,7 @@ function AskBox({ value, onChange, onSubmit, big, placeholder, chips, onConfigur
 }
 
 // ---------- Home Screen ----------
-function HomeScreen({ tenantName, onAsk, onConfigureKey, hasOpenAiKey }) {
+function HomeScreen({ tenantName, onAsk, selectedSource, onSelectSource, onConfigureKey, hasOpenAiKey }) {
   const [value, setValue] = useState("");
 
   return (
@@ -889,6 +909,8 @@ function HomeScreen({ tenantName, onAsk, onConfigureKey, hasOpenAiKey }) {
             value={value}
             onChange={setValue}
             onSubmit={() => value.trim() && onAsk(value.trim())}
+            selectedSource={selectedSource}
+            onSelectSource={onSelectSource}
             onConfigureKey={onConfigureKey}
             hasOpenAiKey={hasOpenAiKey}
             placeholder="örn. Son 30 günde işlem hacmine göre en çok kullanılan 10 ürün" />
@@ -1157,7 +1179,7 @@ function ThinkingMessage({ content }) {
 }
 
 // ---------- Conversation Screen ----------
-function ConversationScreen({ messages, onAsk, onSaveToBoard, onOpenBoards, boardCount, showSqlDefault, onConfigureKey, hasOpenAiKey }) {
+function ConversationScreen({ messages, onAsk, onSaveToBoard, onOpenBoards, boardCount, showSqlDefault, selectedSource, onSelectSource, onConfigureKey, hasOpenAiKey }) {
   const [value, setValue] = useState("");
   const scrollRef = useRef(null);
 
@@ -1211,6 +1233,8 @@ function ConversationScreen({ messages, onAsk, onSaveToBoard, onOpenBoards, boar
               onAsk(value.trim());
               setValue("");
             }}
+            selectedSource={selectedSource}
+            onSelectSource={onSelectSource}
             onConfigureKey={onConfigureKey}
             hasOpenAiKey={hasOpenAiKey}
             placeholder="Devam sorusu sor… (örn. bunu haftalık olarak ayır)" />
@@ -1553,6 +1577,7 @@ function App() {
   const [boardItems, setBoardItems] = useState(readStoredBoardItems);
   const [boardNotice, setBoardNotice] = useState("");
   const [drawer, setDrawer] = useState(null);
+  const [selectedSource, setSelectedSource] = useState(() => window.localStorage.getItem(STORAGE_KEYS.source) || DEFAULT_DATA_SOURCE);
   const [hasOpenAiKey, setHasOpenAiKey] = useState(() => Boolean(window.localStorage.getItem(OPENAI_KEY_STORAGE)));
   const timeoutsRef = useRef(new Map());
   const prevViewRef = useRef("home");
@@ -1566,6 +1591,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEYS.boards, JSON.stringify(boardItems));
   }, [boardItems]);
+
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_KEYS.source, selectedSource);
+  }, [selectedSource]);
 
   useEffect(() => {
     if (!boardNotice) return undefined;
@@ -1606,7 +1635,7 @@ function App() {
         streamedSql ? `SQL üretiliyor:\n${streamedSql}` : "",
         streamed
       ].filter(Boolean).join("\n\n");
-      const finalPayload = await streamAgentAnswer(text, (event) => {
+      const finalPayload = await streamAgentAnswer(text, selectedSource, (event) => {
         if (event.type === "token") streamed += event.token;
         if (event.type === "sql_delta") streamedSql += event.token;
         if (event.type === "sql_done") {
@@ -1796,6 +1825,8 @@ function App() {
           <HomeScreen
             tenantName={tweaks.tenantName}
             onAsk={ask}
+            selectedSource={selectedSource}
+            onSelectSource={setSelectedSource}
             onConfigureKey={configureOpenAiKey}
             hasOpenAiKey={hasOpenAiKey} />}
         {view === "convo" &&
@@ -1805,6 +1836,8 @@ function App() {
             onSaveToBoard={saveMessageToBoard}
             onOpenBoards={openBoards}
             boardCount={boardItems.length}
+            selectedSource={selectedSource}
+            onSelectSource={setSelectedSource}
             onConfigureKey={configureOpenAiKey}
             hasOpenAiKey={hasOpenAiKey}
             showSqlDefault={tweaks.showSqlByDefault} />

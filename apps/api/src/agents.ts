@@ -76,7 +76,7 @@ export class AgentService {
     return this.repository.snapshot().agents.filter((agent) => agent.tenantId === context.tenantId);
   }
 
-  async execute(context: RequestContext, input: { agentId: string; message: string; toolKey?: string; approvalId?: string }): Promise<JsonRecord> {
+  async execute(context: RequestContext, input: { agentId: string; message: string; toolKey?: string; approvalId?: string; connectorId?: string }): Promise<JsonRecord> {
     let final: JsonRecord | undefined;
     for await (const chunk of this.streamExecute(context, input)) {
       if (chunk.event === "done") final = chunk.data;
@@ -85,7 +85,7 @@ export class AgentService {
     return final;
   }
 
-  async *streamExecute(context: RequestContext, input: { agentId: string; message: string; toolKey?: string; approvalId?: string }): AsyncIterable<{ event: AgentStreamEvent; data: JsonRecord }> {
+  async *streamExecute(context: RequestContext, input: { agentId: string; message: string; toolKey?: string; approvalId?: string; connectorId?: string }): AsyncIterable<{ event: AgentStreamEvent; data: JsonRecord }> {
     const agent = this.repository.snapshot().agents.find((item) => item.tenantId === context.tenantId && item.id === input.agentId);
     if (!agent || !agent.enabled) throw blocked(`Agent ${input.agentId} is not available`);
 
@@ -102,7 +102,7 @@ export class AgentService {
       toolKey: decision.toolKey,
       riskLevel: selectedTool?.riskLevel ?? decision.riskLevel,
       approvalId: input.approvalId,
-      payload: { message: input.message, intent: decision.intent }
+      payload: { message: input.message, intent: decision.intent, connectorId: input.connectorId }
     });
     const blockers = safetyRuns.filter((run) => run.status === "BLOCKED");
     if (blockers.length > 0) {
@@ -150,7 +150,7 @@ export class AgentService {
     } else if (decision.intent === "data_query") {
       yield { event: "progress", data: { message: "LLM SQL planı üretiyor", toolKey: "query.run" } };
       let query: SqlGenerationResult | undefined;
-      for await (const chunk of textToSqlService.askStream(context, { question: input.message, execute: true, maskingEnabled: true })) {
+      for await (const chunk of textToSqlService.askStream(context, { question: input.message, connectorId: input.connectorId, execute: true, maskingEnabled: true })) {
         if (chunk.event === "sql_delta") yield { event: "sql_delta", data: chunk.data };
         if (chunk.event === "sql_done") yield { event: "sql_done", data: chunk.data };
         if (chunk.event === "done") query = chunk.data as unknown as SqlGenerationResult;
@@ -160,7 +160,7 @@ export class AgentService {
       yield { event: "tool", data: { toolKey: "query.run", status: "completed", mode: toolResult.mode, result: summarizeToolResult(toolResult) } };
     } else if (decision.toolKey) {
       yield { event: "progress", data: { message: `${decision.toolKey} hazırlanıyor`, toolKey: decision.toolKey } };
-      toolResult = await this.executeTool(context, decision, input.message, input.approvalId);
+      toolResult = await this.executeTool(context, decision, input.message, input.approvalId, input.connectorId);
       yield { event: "tool", data: { toolKey: decision.toolKey, status: "completed", mode: toolResult.mode, result: summarizeToolResult(toolResult) } };
     } else {
       toolResult = {
@@ -205,9 +205,9 @@ export class AgentService {
     return this.repository.snapshot().agentExecutionTraces.filter((trace) => trace.tenantId === context.tenantId);
   }
 
-  private async executeTool(context: RequestContext, decision: AgentDecision, message: string, approvalId?: string): Promise<AgentToolResult> {
+  private async executeTool(context: RequestContext, decision: AgentDecision, message: string, approvalId?: string, connectorId?: string): Promise<AgentToolResult> {
     if (decision.intent === "data_query") {
-      const query = await textToSqlService.ask(context, { question: message, execute: true, maskingEnabled: true });
+      const query = await textToSqlService.ask(context, { question: message, connectorId, execute: true, maskingEnabled: true });
       return buildDataToolResult(message, query);
     }
 
