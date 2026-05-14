@@ -21,10 +21,6 @@ npm run db:seed
 npm run dev
 ```
 
-API: `http://localhost:4000`  
-API docs: `http://localhost:4000/docs`  
-Admin console: `http://localhost:3000`
-
 Local API headers:
 
 ```bash
