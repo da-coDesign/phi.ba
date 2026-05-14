@@ -13,6 +13,7 @@ import { isReadOnlySql } from "../apps/api/src/sql-safety.js";
 import { store } from "../apps/api/src/store.js";
 import { textToSqlService } from "../apps/api/src/text-to-sql.js";
 import { workflowService } from "../apps/api/src/workflows.js";
+import { buildBankingDemoDataset } from "../scripts/seed-banking-demo-data.js";
 
 const TEST_PROVIDER_KEY = "test-sql-provider";
 const TEST_MODEL = "test-sql-model";
@@ -62,6 +63,12 @@ function testSqlForQuestion(question: string): string {
   if (/kampanya|campaign|conversion|dönüşüm|donusum|opt[- ]?out/.test(normalized)) {
     return "SELECT campaign_name, segment, channel, impressions, clicks, conversions, conversion_rate_pct, revenue_try, opt_out_count FROM v_campaign_conversion ORDER BY revenue_try DESC LIMIT 8";
   }
+  if (/teklif|offer|uygun|eligibility|cross[- ]?sell|çapraz|capraz/.test(normalized)) {
+    return "SELECT offer_key, product_name, segment, persona_key, scored_customer_count, eligible_customer_count, avg_score, avg_relationship_value_try FROM v_offer_eligibility ORDER BY eligible_customer_count DESC LIMIT 8";
+  }
+  if (/persona|lifecycle|yaşam|yasam|churn|aktiflik/.test(normalized)) {
+    return "SELECT persona_key, persona_name, segment, lifecycle_stage, customer_count, active_customer_count, marketing_consent_count, avg_digital_maturity_score, avg_churn_risk_score, relationship_value_try FROM v_customer_lifecycle ORDER BY customer_count DESC LIMIT 8";
+  }
   if (/şube|sube|branch|nps|satış|satis|mevduat/.test(normalized)) {
     return "SELECT branch_region, branch_name, active_customers, deposit_balance_try, loan_balance_try, new_products_sold, complaint_count, nps_score FROM v_branch_kpi ORDER BY deposit_balance_try DESC LIMIT 8";
   }
@@ -97,6 +104,30 @@ describe("enterprise safety controls", () => {
         piiMode: "mask_required"
       }
     });
+  });
+
+  it("builds the 2,500 customer scenario-template dataset deterministically", () => {
+    const dataset = buildBankingDemoDataset(42);
+
+    expect(dataset.syntheticCustomerTemplates).toHaveLength(6);
+    expect(dataset.customers).toHaveLength(2500);
+    expect(dataset.customerProfiles).toHaveLength(2500);
+    expect(dataset.customerEvents).toHaveLength(7500);
+    expect(dataset.customerOfferEligibility).toHaveLength(7500);
+    expect(new Set(dataset.customerProfiles.map((row) => row.customer_id))).toHaveLength(2500);
+    expect(new Set(dataset.customerProfiles.map((row) => row.persona_key))).toEqual(new Set([
+      "mass_digital_salary",
+      "affluent_investor",
+      "sme_merchant",
+      "young_mobile_first",
+      "private_wealth",
+      "micro_merchant"
+    ]));
+  });
+
+  it("allowlists scenario reporting views for governed text-to-SQL", async () => {
+    await expect(textToSqlService.ask(context(), { question: "Hangi müşteriler teklif için uygun?", execute: false })).resolves.toMatchObject({ sql: expect.stringContaining("v_offer_eligibility") });
+    await expect(textToSqlService.ask(context(), { question: "Persona lifecycle ve churn dağılımını göster", execute: false })).resolves.toMatchObject({ sql: expect.stringContaining("v_customer_lifecycle") });
   });
 
   it("blocks cross-tenant operations", () => {
@@ -193,6 +224,14 @@ describe("enterprise safety controls", () => {
   });
 
   it("returns card-ready data for metric questions through the central agent", async () => {
+    if (!process.env.DATABASE_URL) {
+      await expect(agentService.execute(context(), {
+        agentId: "agent_risk",
+        message: "Kart onay oranı neden düştü?"
+      })).rejects.toThrow(/DATABASE_URL/);
+      return;
+    }
+
     let final: any;
     for await (const chunk of agentService.streamExecute(context(), {
       agentId: "agent_risk",
@@ -207,6 +246,15 @@ describe("enterprise safety controls", () => {
   });
 
   it("does not turn customer count questions into approval workflows", async () => {
+    if (!process.env.DATABASE_URL) {
+      await expect(agentService.execute(context(), {
+        agentId: "agent_risk",
+        message: "kaç tane müşteri var?"
+      })).rejects.toThrow(/DATABASE_URL/);
+      expect(store.snapshot().approvalRequests).toHaveLength(0);
+      return;
+    }
+
     let final: any;
     for await (const chunk of agentService.streamExecute(context(), {
       agentId: "agent_risk",
@@ -263,15 +311,14 @@ describe("enterprise safety controls", () => {
     await expect(textToSqlService.ask(context(), { question: "Tahsilat bucket bazında nasıl?", execute: false })).resolves.toMatchObject({ sql: expect.stringContaining("v_collections_snapshot") });
   });
 
-  it("uses deterministic synthetic banking fallback when Postgres is unavailable", async () => {
+  it("requires PostgreSQL instead of using synthetic fallback when Postgres is unavailable", async () => {
     const previousDatabaseUrl = process.env.DATABASE_URL;
     delete process.env.DATABASE_URL;
-    let result: any;
     try {
-      result = await connectorService.execute(context(), "connector_pg_reporting", {
+      await expect(connectorService.execute(context(), "connector_pg_reporting", {
         sql: "SELECT product_name, segment, channel, txn_count, txn_volume_try, marketplace_volume_try, successful_txn_count FROM v_transaction_volume LIMIT 10",
         timeoutMs: 100
-      });
+      })).rejects.toThrow(/DATABASE_URL/);
     } finally {
       if (previousDatabaseUrl === undefined) {
         delete process.env.DATABASE_URL;
@@ -279,9 +326,6 @@ describe("enterprise safety controls", () => {
         process.env.DATABASE_URL = previousDatabaseUrl;
       }
     }
-    expect(result.mode).toBe("synthetic-readonly");
-    expect(result.source).toBe("fallback-synthetic");
-    expect(result.rowCount).toBeGreaterThan(0);
   });
 
   it("does not let direct connector execution bypass SQL safety", async () => {

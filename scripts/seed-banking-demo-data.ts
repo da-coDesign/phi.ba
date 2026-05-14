@@ -7,6 +7,57 @@ const { Client } = pg;
 
 type Row = Record<string, string | number | boolean>;
 
+interface PersonaTemplate {
+  persona_key: string;
+  segment: string;
+  display_name: string;
+  description: string;
+  lifecycle_bias: string;
+  primary_need: string;
+  risk_bias: number;
+  digital_bias: number;
+  campaign_bias: number;
+  product_affinity: string[];
+  targetCount: number;
+  preferredChannels: readonly string[];
+  lifecycleStages: readonly string[];
+  profitabilityBands: readonly string[];
+}
+
+interface CustomerSeed extends Row {
+  customer_id: string;
+  segment: string;
+  city: string;
+  age_band: string;
+  income_band: string;
+  acquisition_channel: string;
+  risk_score: number;
+  product_count: number;
+  is_active: boolean;
+  created_at: string;
+  persona_key: string;
+  lifecycle_stage: string;
+  profitability_band: string;
+  digital_maturity_score: number;
+  marketing_consent: boolean;
+  kyc_risk_level: string;
+  primary_branch_id: string;
+  preferred_channel: string;
+  churn_risk_score: number;
+  relationship_value_try: number;
+}
+
+interface AccountSeed extends Row {
+  account_id: string;
+  customer_id: string;
+  product_id: string;
+  branch_id: string;
+  account_type: string;
+  balance_try: number;
+  opened_at: string;
+  status: string;
+}
+
 const anchor = new Date("2026-05-14T00:00:00.000Z");
 const segments = ["Mass", "Affluent", "SME", "Young", "Private", "Micro"] as const;
 const cities = ["Istanbul", "Ankara", "Izmir", "Bursa", "Antalya", "Adana", "Konya", "Gaziantep"] as const;
@@ -50,6 +101,104 @@ const complaintTopics = ["Card decline", "Mobile login", "Loan pricing", "Transf
 const fraudTypes = ["account_takeover", "card_testing", "synthetic_identity", "merchant_collusion", "social_engineering"] as const;
 const competitors = ["Competitor A", "Competitor B", "Competitor C", "Competitor D"] as const;
 const marketProducts = ["Consumer Loan", "SME Working Capital Loan", "Deposit", "Credit Card", "Mortgage", "POS Merchant Bundle"] as const;
+const personaTemplates: PersonaTemplate[] = [
+  {
+    persona_key: "mass_digital_salary",
+    segment: "Mass",
+    display_name: "Mass Digital Salary",
+    description: "Payroll-led mass customer with mobile-first daily banking, moderate balances, and high card usage.",
+    lifecycle_bias: "grow",
+    primary_need: "salary_cashflow_and_card_limits",
+    risk_bias: 46,
+    digital_bias: 78,
+    campaign_bias: 72,
+    product_affinity: ["PRD001", "PRD003", "PRD004", "PRD002"],
+    targetCount: 760,
+    preferredChannels: ["mobile", "web", "atm"],
+    lifecycleStages: ["onboarding", "grow", "retain", "reactivate"],
+    profitabilityBands: ["low", "mid", "upper_mid"]
+  },
+  {
+    persona_key: "affluent_investor",
+    segment: "Affluent",
+    display_name: "Affluent Investor",
+    description: "High-balance customer with deposit, investment, and premium card appetite.",
+    lifecycle_bias: "deepen",
+    primary_need: "wealth_growth_and_deposit_pricing",
+    risk_bias: 30,
+    digital_bias: 68,
+    campaign_bias: 64,
+    product_affinity: ["PRD002", "PRD008", "PRD003", "PRD005"],
+    targetCount: 390,
+    preferredChannels: ["mobile", "branch", "relationship_manager"],
+    lifecycleStages: ["deepen", "retain", "grow"],
+    profitabilityBands: ["upper_mid", "high"]
+  },
+  {
+    persona_key: "sme_merchant",
+    segment: "SME",
+    display_name: "SME Merchant",
+    description: "Merchant and working-capital customer with POS, cashflow, and credit exposure patterns.",
+    lifecycle_bias: "grow",
+    primary_need: "merchant_cashflow_and_pos_financing",
+    risk_bias: 62,
+    digital_bias: 58,
+    campaign_bias: 56,
+    product_affinity: ["PRD007", "PRD006", "PRD001", "PRD003"],
+    targetCount: 420,
+    preferredChannels: ["relationship_manager", "branch", "web"],
+    lifecycleStages: ["onboarding", "grow", "watchlist", "retain"],
+    profitabilityBands: ["mid", "upper_mid", "high"]
+  },
+  {
+    persona_key: "young_mobile_first",
+    segment: "Young",
+    display_name: "Young Mobile First",
+    description: "Low-to-mid balance customer with high mobile engagement, card growth, and churn sensitivity.",
+    lifecycle_bias: "activate",
+    primary_need: "mobile_engagement_and_first_credit",
+    risk_bias: 52,
+    digital_bias: 88,
+    campaign_bias: 82,
+    product_affinity: ["PRD003", "PRD004", "PRD001", "PRD002"],
+    targetCount: 430,
+    preferredChannels: ["mobile", "marketplace", "web"],
+    lifecycleStages: ["onboarding", "activate", "grow", "reactivate"],
+    profitabilityBands: ["low", "mid"]
+  },
+  {
+    persona_key: "private_wealth",
+    segment: "Private",
+    display_name: "Private Wealth",
+    description: "Relationship-managed high value customer with wealth, mortgage, and retention expectations.",
+    lifecycle_bias: "retain",
+    primary_need: "private_banking_retention",
+    risk_bias: 24,
+    digital_bias: 54,
+    campaign_bias: 48,
+    product_affinity: ["PRD008", "PRD002", "PRD005", "PRD003"],
+    targetCount: 160,
+    preferredChannels: ["relationship_manager", "branch", "mobile"],
+    lifecycleStages: ["deepen", "retain", "watchlist"],
+    profitabilityBands: ["high"]
+  },
+  {
+    persona_key: "micro_merchant",
+    segment: "Micro",
+    display_name: "Micro Merchant",
+    description: "Small merchant with volatile transaction flow, POS dependency, and price sensitivity.",
+    lifecycle_bias: "stabilize",
+    primary_need: "simple_pos_and_short_term_liquidity",
+    risk_bias: 58,
+    digital_bias: 62,
+    campaign_bias: 60,
+    product_affinity: ["PRD007", "PRD001", "PRD006", "PRD004"],
+    targetCount: 340,
+    preferredChannels: ["mobile", "branch", "marketplace"],
+    lifecycleStages: ["activate", "grow", "watchlist", "reactivate"],
+    profitabilityBands: ["low", "mid", "upper_mid"]
+  }
+];
 
 async function main(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL;
@@ -58,34 +207,20 @@ async function main(): Promise<void> {
   }
 
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const schemaSql = await readFile(resolve(root, "prisma/migrations/000002_banking_demo_dataset/migration.sql"), "utf8");
+  const schemaSql = await loadMigrationSql(root);
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
-  const random = createPrng(42);
-
-  const customers = buildCustomers(random);
-  const productRows = products.map(([product_id, product_name, product_family, currency]) => ({ product_id, product_name, product_family, currency }));
-  const accounts = buildAccounts(random, customers);
-  const transactions = buildTransactions(random, customers, accounts);
-  const cardTransactions = buildCardTransactions(random, customers);
-  const loanApplications = buildLoanApplications(random, customers);
-  const loanPortfolio = buildLoanPortfolio(random, customers);
-  const riskMonitoring = buildRiskMonitoring(random);
-  const digitalSessions = buildDigitalSessions(random, customers);
-  const mobileRetention = buildMobileRetention(random);
-  const branchPerformance = buildBranchPerformance(random);
-  const campaignEvents = buildCampaignEvents(random);
-  const complaints = buildComplaints(random, customers);
-  const fraudAlerts = buildFraudAlerts(random, customers);
-  const collectionsCases = buildCollectionsCases(random, customers);
-  const treasuryRates = buildTreasuryRates(random);
-  const marketRates = buildMarketRates(random);
+  const dataset = buildBankingDemoDataset(42);
 
   try {
     await client.query("BEGIN");
     await client.query(schemaSql);
     await client.query(`
       TRUNCATE
+        customer_offer_eligibility,
+        customer_events,
+        customer_profiles,
+        synthetic_customer_templates,
         market_rates,
         treasury_rates,
         collections_cases,
@@ -105,23 +240,27 @@ async function main(): Promise<void> {
         bank_customers
       RESTART IDENTITY CASCADE
     `);
-    await insertRows(client, "bank_customers", customers);
-    await insertRows(client, "bank_products", productRows);
-    await insertRows(client, "bank_accounts", accounts);
-    await insertRows(client, "bank_transactions", transactions);
-    await insertRows(client, "card_transactions", cardTransactions);
-    await insertRows(client, "loan_applications", loanApplications);
-    await insertRows(client, "loan_portfolio", loanPortfolio);
-    await insertRows(client, "risk_monitoring", riskMonitoring);
-    await insertRows(client, "digital_sessions", digitalSessions);
-    await insertRows(client, "mobile_retention", mobileRetention);
-    await insertRows(client, "branch_performance", branchPerformance);
-    await insertRows(client, "campaign_events", campaignEvents);
-    await insertRows(client, "complaints", complaints);
-    await insertRows(client, "fraud_alerts", fraudAlerts);
-    await insertRows(client, "collections_cases", collectionsCases);
-    await insertRows(client, "treasury_rates", treasuryRates);
-    await insertRows(client, "market_rates", marketRates);
+    await insertRows(client, "synthetic_customer_templates", dataset.syntheticCustomerTemplates);
+    await insertRows(client, "bank_customers", dataset.customers);
+    await insertRows(client, "bank_products", dataset.products);
+    await insertRows(client, "customer_profiles", dataset.customerProfiles);
+    await insertRows(client, "bank_accounts", dataset.accounts);
+    await insertRows(client, "bank_transactions", dataset.transactions);
+    await insertRows(client, "card_transactions", dataset.cardTransactions);
+    await insertRows(client, "loan_applications", dataset.loanApplications);
+    await insertRows(client, "loan_portfolio", dataset.loanPortfolio);
+    await insertRows(client, "risk_monitoring", dataset.riskMonitoring);
+    await insertRows(client, "digital_sessions", dataset.digitalSessions);
+    await insertRows(client, "mobile_retention", dataset.mobileRetention);
+    await insertRows(client, "branch_performance", dataset.branchPerformance);
+    await insertRows(client, "campaign_events", dataset.campaignEvents);
+    await insertRows(client, "complaints", dataset.complaints);
+    await insertRows(client, "fraud_alerts", dataset.fraudAlerts);
+    await insertRows(client, "collections_cases", dataset.collectionsCases);
+    await insertRows(client, "treasury_rates", dataset.treasuryRates);
+    await insertRows(client, "market_rates", dataset.marketRates);
+    await insertRows(client, "customer_events", dataset.customerEvents);
+    await insertRows(client, "customer_offer_eligibility", dataset.customerOfferEligibility);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -131,46 +270,233 @@ async function main(): Promise<void> {
   }
 
   const counts = {
-    customers: customers.length,
-    accounts: accounts.length,
-    transactions: transactions.length,
-    cardTransactions: cardTransactions.length,
-    loanApplications: loanApplications.length,
-    loanPortfolio: loanPortfolio.length,
-    riskMonitoring: riskMonitoring.length,
-    digitalSessions: digitalSessions.length,
-    mobileRetention: mobileRetention.length,
-    branchPerformance: branchPerformance.length,
-    campaignEvents: campaignEvents.length,
-    complaints: complaints.length,
-    fraudAlerts: fraudAlerts.length,
-    collectionsCases: collectionsCases.length,
-    treasuryRates: treasuryRates.length,
-    marketRates: marketRates.length
+    syntheticCustomerTemplates: dataset.syntheticCustomerTemplates.length,
+    customers: dataset.customers.length,
+    customerProfiles: dataset.customerProfiles.length,
+    accounts: dataset.accounts.length,
+    transactions: dataset.transactions.length,
+    cardTransactions: dataset.cardTransactions.length,
+    loanApplications: dataset.loanApplications.length,
+    loanPortfolio: dataset.loanPortfolio.length,
+    riskMonitoring: dataset.riskMonitoring.length,
+    digitalSessions: dataset.digitalSessions.length,
+    mobileRetention: dataset.mobileRetention.length,
+    branchPerformance: dataset.branchPerformance.length,
+    campaignEvents: dataset.campaignEvents.length,
+    complaints: dataset.complaints.length,
+    fraudAlerts: dataset.fraudAlerts.length,
+    collectionsCases: dataset.collectionsCases.length,
+    treasuryRates: dataset.treasuryRates.length,
+    marketRates: dataset.marketRates.length,
+    customerEvents: dataset.customerEvents.length,
+    customerOfferEligibility: dataset.customerOfferEligibility.length
   };
   console.log(`Seeded synthetic banking demo dataset (${Object.values(counts).reduce((sum, count) => sum + count, 0)} rows).`);
   console.table(counts);
 }
 
-function buildCustomers(random: () => number): Row[] {
+export function buildBankingDemoDataset(seed = 42) {
+  const random = createPrng(seed);
+  const customerSeeds = buildCustomers(random);
+  const customerRows = customerSeeds.map(toBankCustomerRow);
+  const productRows = products.map(([product_id, product_name, product_family, currency]) => ({ product_id, product_name, product_family, currency }));
+  const customerProfiles = buildCustomerProfiles(customerSeeds);
+  const accounts = buildAccounts(random, customerSeeds);
+  const transactions = buildTransactions(random, customerSeeds, accounts);
+  const cardTransactions = buildCardTransactions(random, customerSeeds);
+  const loanApplications = buildLoanApplications(random, customerSeeds);
+  const loanPortfolio = buildLoanPortfolio(random, customerSeeds);
+  const riskMonitoring = buildRiskMonitoring(random);
+  const digitalSessions = buildDigitalSessions(random, customerSeeds);
+  const mobileRetention = buildMobileRetention(random);
+  const branchPerformance = buildBranchPerformance(random);
+  const campaignEvents = buildCampaignEvents(random);
+  const complaints = buildComplaints(random, customerSeeds);
+  const fraudAlerts = buildFraudAlerts(random, customerSeeds);
+  const collectionsCases = buildCollectionsCases(random, customerSeeds);
+  const treasuryRates = buildTreasuryRates(random);
+  const marketRates = buildMarketRates(random);
+  const customerEvents = buildCustomerEvents(random, customerSeeds);
+  const customerOfferEligibility = buildCustomerOfferEligibility(random, customerSeeds);
+  return {
+    syntheticCustomerTemplates: buildSyntheticCustomerTemplates(),
+    customers: customerRows,
+    customerProfiles,
+    products: productRows,
+    accounts,
+    transactions,
+    cardTransactions,
+    loanApplications,
+    loanPortfolio,
+    riskMonitoring,
+    digitalSessions,
+    mobileRetention,
+    branchPerformance,
+    campaignEvents,
+    complaints,
+    fraudAlerts,
+    collectionsCases,
+    treasuryRates,
+    marketRates,
+    customerEvents,
+    customerOfferEligibility
+  };
+}
+
+async function loadMigrationSql(root: string): Promise<string> {
+  const migrationsRoot = resolve(root, "prisma/migrations");
+  const migrationDirs = [
+    "000002_banking_demo_dataset",
+    "000003_dataset_summary_view",
+    "000004_customer_scenario_templates"
+  ];
+  const files = await Promise.all(
+    migrationDirs.map((dir) => readFile(resolve(migrationsRoot, dir, "migration.sql"), "utf8"))
+  );
+  return files.join("\n\n");
+}
+
+function buildSyntheticCustomerTemplates(): Row[] {
+  return personaTemplates.map((template) => ({
+    persona_key: template.persona_key,
+    segment: template.segment,
+    display_name: template.display_name,
+    description: template.description,
+    lifecycle_bias: template.lifecycle_bias,
+    primary_need: template.primary_need,
+    risk_bias: template.risk_bias,
+    digital_bias: template.digital_bias,
+    campaign_bias: template.campaign_bias,
+    product_affinity: JSON.stringify(template.product_affinity)
+  }));
+}
+
+function buildCustomers(random: () => number): CustomerSeed[] {
   return Array.from({ length: 2500 }, (_, index) => {
-    const segment = pick(segments, random);
+    const template = personaForIndex(index);
+    const relationshipValue = relationshipValueFor(template, random);
+    const lifecycleStage = pick(template.lifecycleStages, random);
+    const digitalScore = round(range(random, template.digital_bias - 16, template.digital_bias + 14), 2);
+    const churnRisk = round(churnRiskFor(template, lifecycleStage, random), 2);
+    const riskScore = round(riskScoreFor(template, random), 2);
     return {
       customer_id: id("CUST", index),
-      segment,
+      segment: template.segment,
       city: pick(cities, random),
-      age_band: pick(["18-25", "26-35", "36-45", "46-60", "60+"], random),
-      income_band: segment === "Affluent" || segment === "Private" ? pick(["upper_mid", "high"], random) : pick(incomeBands, random),
-      acquisition_channel: pick(acquisitionChannels, random),
-      risk_score: round(segment === "SME" ? range(random, 35, 78) : range(random, 18, 72), 2),
-      product_count: Math.floor(range(random, 1, segment === "Private" ? 7 : 5)),
+      age_band: ageBandFor(template, random),
+      income_band: incomeBandFor(template, random),
+      acquisition_channel: acquisitionChannelFor(template, random),
+      risk_score: riskScore,
+      product_count: productCountFor(template, random),
       is_active: random() > 0.08,
-      created_at: daysAgo(Math.floor(range(random, 30, 2400)))
+      created_at: daysAgo(Math.floor(range(random, 30, 2400))),
+      persona_key: template.persona_key,
+      lifecycle_stage: lifecycleStage,
+      profitability_band: pick(template.profitabilityBands, random),
+      digital_maturity_score: Math.max(1, Math.min(99, digitalScore)),
+      marketing_consent: random() < template.campaign_bias / 100,
+      kyc_risk_level: riskScore > 68 ? "high" : riskScore > 45 ? "medium" : "low",
+      primary_branch_id: pick(branches, random)[0],
+      preferred_channel: pick(template.preferredChannels, random),
+      churn_risk_score: Math.max(1, Math.min(99, churnRisk)),
+      relationship_value_try: relationshipValue
     };
   });
 }
 
-function buildAccounts(random: () => number, customers: Row[]): Row[] {
+function toBankCustomerRow(customer: CustomerSeed): Row {
+  return {
+    customer_id: customer.customer_id,
+    segment: customer.segment,
+    city: customer.city,
+    age_band: customer.age_band,
+    income_band: customer.income_band,
+    acquisition_channel: customer.acquisition_channel,
+    risk_score: customer.risk_score,
+    product_count: customer.product_count,
+    is_active: customer.is_active,
+    created_at: customer.created_at
+  };
+}
+
+function buildCustomerProfiles(customers: CustomerSeed[]): Row[] {
+  return customers.map((customer) => ({
+    customer_id: customer.customer_id,
+    persona_key: customer.persona_key,
+    lifecycle_stage: customer.lifecycle_stage,
+    profitability_band: customer.profitability_band,
+    digital_maturity_score: customer.digital_maturity_score,
+    marketing_consent: customer.marketing_consent,
+    kyc_risk_level: customer.kyc_risk_level,
+    primary_branch_id: customer.primary_branch_id,
+    preferred_channel: customer.preferred_channel,
+    churn_risk_score: customer.churn_risk_score,
+    relationship_value_try: customer.relationship_value_try
+  }));
+}
+
+function personaForIndex(index: number): PersonaTemplate {
+  let cursor = 0;
+  for (const template of personaTemplates) {
+    cursor += template.targetCount;
+    if (index < cursor) return template;
+  }
+  return personaTemplates.at(-1)!;
+}
+
+function ageBandFor(template: PersonaTemplate, random: () => number): string {
+  if (template.persona_key === "young_mobile_first") return pick(["18-25", "26-35"], random);
+  if (template.persona_key === "private_wealth") return pick(["46-60", "60+"], random);
+  if (template.segment === "SME" || template.segment === "Micro") return pick(["26-35", "36-45", "46-60"], random);
+  return pick(["26-35", "36-45", "46-60", "60+"], random);
+}
+
+function incomeBandFor(template: PersonaTemplate, random: () => number): string {
+  if (template.segment === "Private") return "high";
+  if (template.segment === "Affluent") return pick(["upper_mid", "high"], random);
+  if (template.segment === "Young") return pick(["low", "mid"], random);
+  if (template.segment === "SME") return pick(["mid", "upper_mid", "high"], random);
+  return pick(incomeBands, random);
+}
+
+function acquisitionChannelFor(template: PersonaTemplate, random: () => number): string {
+  if (template.persona_key === "private_wealth") return pick(["relationship_manager", "branch"], random);
+  if (template.persona_key === "young_mobile_first") return pick(["mobile", "marketplace", "web"], random);
+  if (template.segment === "SME") return pick(["relationship_manager", "branch", "web"], random);
+  return pick(acquisitionChannels, random);
+}
+
+function riskScoreFor(template: PersonaTemplate, random: () => number): number {
+  return Math.max(8, Math.min(92, range(random, template.risk_bias - 14, template.risk_bias + 18)));
+}
+
+function productCountFor(template: PersonaTemplate, random: () => number): number {
+  const maxProducts = template.segment === "Private" ? 8 : template.segment === "Affluent" ? 6 : template.segment === "SME" ? 6 : 5;
+  return Math.max(1, Math.floor(range(random, 2, maxProducts)));
+}
+
+function relationshipValueFor(template: PersonaTemplate, random: () => number): number {
+  const value = template.segment === "Private"
+    ? range(random, 900_000, 8_500_000)
+    : template.segment === "Affluent"
+      ? range(random, 180_000, 1_900_000)
+      : template.segment === "SME"
+        ? range(random, 120_000, 2_800_000)
+        : template.segment === "Micro"
+          ? range(random, 45_000, 780_000)
+          : template.segment === "Young"
+            ? range(random, 8_000, 180_000)
+            : range(random, 18_000, 420_000);
+  return round(value, 2);
+}
+
+function churnRiskFor(template: PersonaTemplate, lifecycleStage: string, random: () => number): number {
+  const stagePressure = lifecycleStage === "reactivate" ? 22 : lifecycleStage === "watchlist" ? 18 : lifecycleStage === "retain" ? 10 : 0;
+  const digitalRelief = template.digital_bias > 75 ? -7 : 0;
+  return range(random, 18, 54) + stagePressure + digitalRelief;
+}
+
+function buildAccounts(random: () => number, customers: CustomerSeed[]): AccountSeed[] {
   return Array.from({ length: 4000 }, (_, index) => {
     const customer = pick(customers, random);
     const product = pick(products.slice(0, 5), random);
@@ -187,7 +513,7 @@ function buildAccounts(random: () => number, customers: Row[]): Row[] {
   });
 }
 
-function buildTransactions(random: () => number, customers: Row[], accounts: Row[]): Row[] {
+function buildTransactions(random: () => number, customers: CustomerSeed[], accounts: AccountSeed[]): Row[] {
   const merchantCategories = ["grocery", "marketplace", "travel", "utilities", "loan_payment", "investment", "cash_withdrawal"];
   return Array.from({ length: 40000 }, (_, index) => {
     const account = pick(accounts, random);
@@ -212,7 +538,7 @@ function buildTransactions(random: () => number, customers: Row[], accounts: Row
   });
 }
 
-function buildCardTransactions(random: () => number, customers: Row[]): Row[] {
+function buildCardTransactions(random: () => number, customers: CustomerSeed[]): Row[] {
   return Array.from({ length: 12000 }, (_, index) => {
     const customer = pick(customers, random);
     const channel = pick(["Sanal POS", "Mobile Wallet", "E-Commerce", "Physical POS"], random);
@@ -232,7 +558,7 @@ function buildCardTransactions(random: () => number, customers: Row[]): Row[] {
   });
 }
 
-function buildLoanApplications(random: () => number, customers: Row[]): Row[] {
+function buildLoanApplications(random: () => number, customers: CustomerSeed[]): Row[] {
   return Array.from({ length: 3000 }, (_, index) => {
     const customer = pick(customers, random);
     const productId = pick(["PRD004", "PRD005", "PRD006"], random);
@@ -253,7 +579,7 @@ function buildLoanApplications(random: () => number, customers: Row[]): Row[] {
   });
 }
 
-function buildLoanPortfolio(random: () => number, customers: Row[]): Row[] {
+function buildLoanPortfolio(random: () => number, customers: CustomerSeed[]): Row[] {
   return Array.from({ length: 1200 }, (_, index) => {
     const customer = pick(customers, random);
     const productId = pick(["PRD004", "PRD005", "PRD006"], random);
@@ -301,7 +627,7 @@ function buildRiskMonitoring(random: () => number): Row[] {
   return rows;
 }
 
-function buildDigitalSessions(random: () => number, customers: Row[]): Row[] {
+function buildDigitalSessions(random: () => number, customers: CustomerSeed[]): Row[] {
   return Array.from({ length: 8000 }, (_, index) => {
     const customer = pick(customers, random);
     const count = Math.floor(range(random, 1, 18));
@@ -384,7 +710,7 @@ function buildCampaignEvents(random: () => number): Row[] {
   });
 }
 
-function buildComplaints(random: () => number, customers: Row[]): Row[] {
+function buildComplaints(random: () => number, customers: CustomerSeed[]): Row[] {
   return Array.from({ length: 600 }, (_, index) => {
     const customer = pick(customers, random);
     const status = pick(["open", "in_progress", "closed"], random);
@@ -402,7 +728,7 @@ function buildComplaints(random: () => number, customers: Row[]): Row[] {
   });
 }
 
-function buildFraudAlerts(random: () => number, customers: Row[]): Row[] {
+function buildFraudAlerts(random: () => number, customers: CustomerSeed[]): Row[] {
   return Array.from({ length: 700 }, (_, index) => {
     const confirmed = random() > 0.68;
     return {
@@ -419,7 +745,7 @@ function buildFraudAlerts(random: () => number, customers: Row[]): Row[] {
   });
 }
 
-function buildCollectionsCases(random: () => number, customers: Row[]): Row[] {
+function buildCollectionsCases(random: () => number, customers: CustomerSeed[]): Row[] {
   return Array.from({ length: 500 }, (_, index) => {
     const customer = pick(customers, random);
     const exposure = range(random, 2500, customer.segment === "SME" ? 1_200_000 : 180_000);
@@ -473,6 +799,82 @@ function buildMarketRates(random: () => number): Row[] {
     }
   }
   return rows;
+}
+
+function buildCustomerEvents(random: () => number, customers: CustomerSeed[]): Row[] {
+  const eventTypesByStage: Record<string, readonly string[]> = {
+    onboarding: ["account_opened", "first_login", "first_product_activation"],
+    activate: ["mobile_activation", "card_first_use", "marketplace_visit"],
+    grow: ["salary_inflow", "cross_sell_signal", "limit_review"],
+    deepen: ["wealth_review", "deposit_rollover", "investment_interest"],
+    retain: ["relationship_review", "service_recovery", "loyalty_offer"],
+    reactivate: ["dormancy_warning", "winback_offer", "low_activity_signal"],
+    watchlist: ["risk_watchlist", "overdue_signal", "manual_review"]
+  };
+  return customers.flatMap((customer, customerIndex) => {
+    const eventTypes = eventTypesByStage[customer.lifecycle_stage] ?? ["relationship_signal", "product_signal", "service_signal"];
+    return Array.from({ length: 3 }, (_, eventIndex) => {
+      const eventType = eventTypes[eventIndex % eventTypes.length]!;
+      const value = eventType.includes("risk") || eventType.includes("overdue")
+        ? range(random, 5_000, 480_000)
+        : eventType.includes("wealth") || eventType.includes("deposit")
+          ? range(random, 25_000, 1_600_000)
+          : range(random, 250, 95_000);
+      return {
+        event_id: `EVT_${String(customerIndex + 1).padStart(6, "0")}_${eventIndex + 1}`,
+        customer_id: customer.customer_id,
+        event_type: eventType,
+        event_date: daysAgo(Math.floor(range(random, 0, 180))),
+        channel: customer.preferred_channel,
+        severity: severityForEvent(eventType, customer, random),
+        value_try: round(value, 2),
+        metadata: JSON.stringify({
+          persona_key: customer.persona_key,
+          lifecycle_stage: customer.lifecycle_stage,
+          source: "scenario_template"
+        })
+      };
+    });
+  });
+}
+
+function buildCustomerOfferEligibility(random: () => number, customers: CustomerSeed[]): Row[] {
+  return customers.flatMap((customer, customerIndex) => {
+    const template = personaTemplates.find((item) => item.persona_key === customer.persona_key) ?? personaTemplates[0]!;
+    return template.product_affinity.slice(0, 3).map((productId, offerIndex) => {
+      const rawScore = template.campaign_bias + Number(customer.digital_maturity_score) * 0.22 - Number(customer.churn_risk_score) * 0.18 + range(random, -12, 14);
+      const score = Math.max(1, Math.min(99, round(rawScore, 2)));
+      const eligible = Boolean(customer.marketing_consent) && score >= (customer.kyc_risk_level === "high" ? 74 : 58);
+      return {
+        eligibility_id: `ELIG_${String(customerIndex + 1).padStart(6, "0")}_${offerIndex + 1}`,
+        customer_id: customer.customer_id,
+        offer_key: offerKeyForProduct(productId),
+        product_id: productId,
+        score,
+        eligible,
+        reason: eligible ? reasonForOffer(productId, customer) : customer.marketing_consent ? "risk_or_low_propensity" : "marketing_consent_missing",
+        expires_at: daysAgo(-Math.floor(range(random, 15, 75)))
+      };
+    });
+  });
+}
+
+function severityForEvent(eventType: string, customer: CustomerSeed, random: () => number): string {
+  if (eventType.includes("risk") || eventType.includes("overdue")) return customer.kyc_risk_level === "high" ? "HIGH" : "MEDIUM";
+  if (eventType.includes("warning") || eventType.includes("recovery")) return random() > 0.5 ? "MEDIUM" : "LOW";
+  return "LOW";
+}
+
+function offerKeyForProduct(productId: string): string {
+  const product = products.find((item) => item[0] === productId);
+  return `offer_${String(product?.[1] ?? productId).toLocaleLowerCase("en-US").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")}`;
+}
+
+function reasonForOffer(productId: string, customer: CustomerSeed): string {
+  if (productId === "PRD006" || productId === "PRD007") return `${customer.persona_key}_merchant_cashflow_fit`;
+  if (productId === "PRD008" || productId === "PRD002") return `${customer.persona_key}_balance_growth_fit`;
+  if (productId === "PRD003") return `${customer.persona_key}_card_usage_fit`;
+  return `${customer.persona_key}_lifecycle_fit`;
 }
 
 async function insertRows(client: pg.Client, table: string, rows: Row[], batchSize = 500): Promise<void> {
@@ -534,7 +936,9 @@ function id(prefix: string, index: number): string {
   return `${prefix}_${String(index + 1).padStart(6, "0")}`;
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}

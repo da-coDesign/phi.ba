@@ -28,12 +28,12 @@ Set a fresh server-side OpenAI key in `.env` before asking live agent questions:
 LLM_PROVIDER=openai
 LLM_MODEL=gpt-5.4-mini
 TEXT_TO_SQL_MODEL=gpt-5.4-mini
-OPENAI_API_KEY=sk-proj-your-fresh-key
+OPENAI_API_KEY=<server-side-openai-api-key>
 ```
 
 Do not commit `.env` or paste production keys into chat. If `OPENAI_API_KEY` is missing, the agent returns a connection error instead of fabricated analysis.
 
-If Postgres is not available, the API still answers governed demo questions through a deterministic synthetic fallback. Set `BANKING_DEMO_FORCE_FALLBACK=true` to force that mode.
+FBDWHPRD queries require PostgreSQL. Run migrations and `npm run db:seed:banking-demo` before using the agent against the banking dataset; the API returns a controlled connector error instead of fabricating rows when `DATABASE_URL` is missing.
 
 For Vercel, do not leave `NEXT_PUBLIC_API_BASE_URL` pointed at `http://localhost:4000`. The deployed web app must point to a reachable API deployment URL, while local development can keep `http://localhost:4000`.
 
@@ -125,7 +125,7 @@ curl -s http://localhost:4000/api/v1/sentry/run \
 
 - LLM calls default to real OpenAI Responses API calls.
 - Text-to-SQL always goes through the configured model provider; tests register an explicit provider stub so CI does not require an external key.
-- PostgreSQL connector executes read-only SQL against `DATABASE_URL` when available, then falls back to deterministic synthetic banking rows if local DB is unavailable.
+- PostgreSQL connector executes read-only SQL against `DATABASE_URL`; no synthetic query fallback is used at runtime.
 - Azure OpenAI, Anthropic, Gemini, Vault/KMS, OIDC, SAML, SCIM, SFTP, SharePoint, Slack, Teams, Jira, and email are adapter placeholders.
 - Market intelligence uses governed example data and does not scrape.
 - Simulation is deterministic foundation logic, not a production ML engine.

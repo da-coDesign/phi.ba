@@ -201,6 +201,10 @@ function buildBusinessContext(): string {
     "Rakip faiz ve market karsilastirmasi icin v_market_rate_comparison kullan.",
     "Genel islem hacmi icin v_transaction_volume kullan.",
     "Veri seti kayit sayilari ve 'kac musteri var' sorulari icin v_dataset_summary kullan.",
+    "Persona, yasam dongusu, churn ve aktiflik sorulari icin v_customer_lifecycle kullan.",
+    "Karlilik, segment degeri ve risk/deger karsilastirmasi icin v_segment_profitability kullan.",
+    "Kanal davranisi, dijital olgunluk ve login/satis sinyalleri icin v_channel_behavior kullan.",
+    "Cross-sell ve teklif uygunlugu sorulari icin v_offer_eligibility veya v_product_cross_sell kullan.",
     "Musteri segment ve bakiye ozetleri icin v_customer_360 kullan."
   ].join("\n");
 }

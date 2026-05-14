@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS market_rates (
 );
 
 CREATE INDEX IF NOT EXISTS idx_bank_transactions_date ON bank_transactions(transaction_date);
-CREATE INDEX IF NOT EXISTS idx_bank_transactions_product ON bank_transactions(product_id, segment);
+CREATE INDEX IF NOT EXISTS idx_bank_transactions_product ON bank_transactions(product_id, channel);
 CREATE INDEX IF NOT EXISTS idx_card_transactions_date ON card_transactions(transaction_date);
 CREATE INDEX IF NOT EXISTS idx_loan_portfolio_segment ON loan_portfolio(segment, risk_band);
 CREATE INDEX IF NOT EXISTS idx_complaints_topic ON complaints(topic, priority);

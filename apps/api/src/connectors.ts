@@ -1,7 +1,6 @@
 import { permissions, type RequestContext } from "@phi-ba/contracts";
 import { createId } from "@phi-ba/shared";
 import pg from "pg";
-import { executeBankingDemoQuery } from "./banking-demo-data.js";
 import { blocked } from "./errors.js";
 import { safetyGateService } from "./safety-gates.js";
 import { store, type PlatformStore } from "./store.js";
@@ -32,17 +31,18 @@ class PostgreSqlConnectorAdapter implements ConnectorAdapter {
   health(connector: Connector): { status: Connector["status"]; message: string } {
     const databaseUrlEnv = typeof connector.config.databaseUrlEnv === "string" ? connector.config.databaseUrlEnv : "DATABASE_URL";
     const hasDatabaseUrl = Boolean(process.env[databaseUrlEnv]);
-    const mode = hasDatabaseUrl && process.env.BANKING_DEMO_FORCE_FALLBACK !== "true" ? "postgres" : "synthetic fallback";
+    const mode = hasDatabaseUrl ? "postgres" : "unavailable";
     return { status: connector.status, message: `PostgreSQL connector ${connector.name} is ${connector.status}; execution mode is ${mode}.` };
   }
 
   test(connector: Connector): { ok: boolean; message: string } {
     const databaseUrlEnv = typeof connector.config.databaseUrlEnv === "string" ? connector.config.databaseUrlEnv : "DATABASE_URL";
+    const hasDatabaseUrl = Boolean(process.env[databaseUrlEnv]);
     return {
-      ok: connector.status !== "unknown",
-      message: process.env[databaseUrlEnv]
+      ok: connector.status !== "unknown" && hasDatabaseUrl,
+      message: hasDatabaseUrl
         ? `Read-only connection will use ${databaseUrlEnv}; run a governed query to verify permissions.`
-        : "DATABASE_URL is not set; connector will use deterministic synthetic fallback rows."
+        : `${databaseUrlEnv} is not set; PostgreSQL execution is required for this connector.`
     };
   }
 
@@ -54,37 +54,22 @@ class PostgreSqlConnectorAdapter implements ConnectorAdapter {
     const startedAt = Date.now();
     const timeoutMs = Math.min(Number(payload.timeoutMs ?? connector.config.timeoutMs ?? 8000), 15000);
     const databaseUrl = resolveDatabaseUrl(connector);
-    if (databaseUrl && process.env.BANKING_DEMO_FORCE_FALLBACK !== "true") {
-      try {
-        const result = await runPostgresQuery(databaseUrl, sql, timeoutMs);
-        return {
-          connectorId: connector.id,
-          mode: "postgres-readonly",
-          source: "postgres",
-          rows: result.rows,
-          rowCount: result.rowCount,
-          columns: result.fields.map((field) => field.name),
-          queryMs: Date.now() - startedAt,
-          executedAt: new Date().toISOString()
-        };
-      } catch {
-        if (connector.config.disableSyntheticFallback === true) {
-          throw blocked("PostgreSQL execution failed; verify DATABASE_URL, migrations, seed data, and read-only permissions.");
-        }
-      }
+    if (!databaseUrl) throw blocked("DATABASE_URL is required for PostgreSQL connector execution. Run migrations and seed FBDWHPRD before querying.");
+    try {
+      const result = await runPostgresQuery(databaseUrl, sql, timeoutMs);
+      return {
+        connectorId: connector.id,
+        mode: "postgres-readonly",
+        source: "postgres",
+        rows: result.rows,
+        rowCount: result.rowCount,
+        columns: result.fields.map((field) => field.name),
+        queryMs: Date.now() - startedAt,
+        executedAt: new Date().toISOString()
+      };
+    } catch {
+      throw blocked("PostgreSQL execution failed; verify DATABASE_URL, migrations, seed data, and read-only permissions.");
     }
-    const fallback = executeBankingDemoQuery(sql);
-    return {
-      connectorId: connector.id,
-      mode: "synthetic-readonly",
-      source: fallback.source,
-      topic: fallback.topic,
-      rows: fallback.rows,
-      rowCount: fallback.rowCount,
-      warning: databaseUrl ? "PostgreSQL was unavailable; synthetic fallback rows were used." : "DATABASE_URL is not set; synthetic fallback rows were used.",
-      queryMs: Date.now() - startedAt,
-      executedAt: new Date().toISOString()
-    };
   }
 }
 
