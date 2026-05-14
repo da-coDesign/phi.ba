@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { permissions, type RequestContext } from "@phi-ba/contracts";
 import { agentService } from "../apps/api/src/agents.js";
+import { chatKitService } from "../apps/api/src/chatkit.js";
 import { connectorService } from "../apps/api/src/connectors.js";
 import { ApiError } from "../apps/api/src/errors.js";
 import { marketIntelligenceService } from "../apps/api/src/market-intelligence.js";
@@ -107,6 +108,10 @@ describe("enterprise safety controls", () => {
     expect(chunks.some((chunk) => chunk.event === "token")).toBe(true);
     expect(chunks.at(-1)?.event).toBe("done");
     expect(store.snapshot().agentExecutionTraces[0]?.status).toBe("completed");
+  });
+
+  it("keeps the configured OpenAI Agent Builder workflow ID available server-side", () => {
+    expect(chatKitService.getWorkflowId()).toBe("wf_6a05a5d289c481909f30fc151a30d52d068e34df71dd22c3");
   });
 
   it("requires human approval for high-risk workflow actions", async () => {

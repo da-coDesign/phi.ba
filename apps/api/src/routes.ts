@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { permissions } from "@phi-ba/contracts";
 import { createId } from "@phi-ba/shared";
 import { agentService } from "./agents.js";
+import { chatKitService } from "./chatkit.js";
 import { connectorService } from "./connectors.js";
 import { created, ok } from "./http.js";
 import { identityService } from "./identity.js";
@@ -199,6 +200,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/v1/tools", async (request, reply) => {
     requirePermission(request.platformContext, permissions.agentsRead);
     return ok(reply, agentService.tools.list());
+  });
+  app.get("/api/v1/openai/chatkit/workflow", async (request, reply) => {
+    requirePermission(request.platformContext, permissions.agentsRead);
+    return ok(reply, { workflowId: chatKitService.getWorkflowId() });
+  });
+  app.post("/api/v1/openai/chatkit/session", async (request, reply) => {
+    return ok(reply, await chatKitService.createSession(request.platformContext));
   });
   app.post("/api/v1/agents/:id/execute", async (request: AnyRequest, reply) => {
     return ok(reply, await agentService.execute(request.platformContext, { ...body(request), agentId: params(request).id }));
