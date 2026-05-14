@@ -4,6 +4,7 @@ import { agentService, classifyAgentIntent } from "../apps/api/src/agents.js";
 import { chatKitService } from "../apps/api/src/chatkit.js";
 import { connectorService } from "../apps/api/src/connectors.js";
 import { ApiError } from "../apps/api/src/errors.js";
+import { llmGatewayService } from "../apps/api/src/llm.js";
 import { marketIntelligenceService } from "../apps/api/src/market-intelligence.js";
 import { safetyGateService } from "../apps/api/src/safety-gates.js";
 import { sentryService } from "../apps/api/src/sentry.js";
@@ -12,6 +13,65 @@ import { isReadOnlySql } from "../apps/api/src/sql-safety.js";
 import { store } from "../apps/api/src/store.js";
 import { textToSqlService } from "../apps/api/src/text-to-sql.js";
 import { workflowService } from "../apps/api/src/workflows.js";
+
+const TEST_PROVIDER_KEY = "test-sql-provider";
+const TEST_MODEL = "test-sql-model";
+
+async function completeTestProvider(input: any): Promise<{ text: string; tokenUsage: { input: number; output: number } }> {
+  const text = buildTestProviderText(input.variables ?? {});
+  return {
+    text,
+    tokenUsage: {
+      input: Math.ceil(String(input.prompt ?? "").length / 4),
+      output: Math.ceil(text.length / 4)
+    }
+  };
+}
+
+const testModelProvider = {
+  key: TEST_PROVIDER_KEY,
+  complete: completeTestProvider,
+  async *stream(input: any): AsyncIterable<string> {
+    const result = await completeTestProvider(input);
+    for (const token of result.text.split(/(\s+)/).filter(Boolean)) {
+      yield token;
+    }
+  }
+};
+
+function buildTestProviderText(variables: Record<string, unknown>): string {
+  const question = String(variables.question ?? "");
+  if (question) return testSqlForQuestion(question);
+  const toolSummary = String(variables.tool_summary ?? "");
+  if (toolSummary) return toolSummary;
+  const userMessage = String(variables.user_message ?? "");
+  return userMessage ? `Test provider response for: ${userMessage}` : "Test provider response.";
+}
+
+function testSqlForQuestion(question: string): string {
+  const normalized = question.toLocaleLowerCase("tr-TR");
+  if (/(?:kaç|kac|sayı|sayısı|sayisi|adet|count).*(?:müşteri|musteri|customer)|(?:müşteri|musteri|customer).*(?:kaç|kac|sayı|sayısı|sayisi|adet|count)/.test(normalized)) {
+    return "SELECT metric_name, row_count, description FROM v_dataset_summary WHERE metric_name = 'customers' LIMIT 1";
+  }
+  if (/fraud|dolandır|dolandir|sahte|alarm|uyarı|uyari|alert/.test(normalized)) {
+    return "SELECT fraud_type, severity, alert_count, confirmed_count, amount_at_risk_try, confirmed_amount_try FROM v_fraud_alerts ORDER BY amount_at_risk_try DESC LIMIT 8";
+  }
+  if (/tahsilat|collections|gecikmiş|gecikmis|dpd|recovery|geri ödeme|geri odeme/.test(normalized)) {
+    return "SELECT segment, bucket, case_count, exposure_try, recovered_try, recovery_rate_pct, promise_to_pay_count FROM v_collections_snapshot ORDER BY exposure_try DESC LIMIT 8";
+  }
+  if (/kampanya|campaign|conversion|dönüşüm|donusum|opt[- ]?out/.test(normalized)) {
+    return "SELECT campaign_name, segment, channel, impressions, clicks, conversions, conversion_rate_pct, revenue_try, opt_out_count FROM v_campaign_conversion ORDER BY revenue_try DESC LIMIT 8";
+  }
+  if (/şube|sube|branch|nps|satış|satis|mevduat/.test(normalized)) {
+    return "SELECT branch_region, branch_name, active_customers, deposit_balance_try, loan_balance_try, new_products_sold, complaint_count, nps_score FROM v_branch_kpi ORDER BY deposit_balance_try DESC LIMIT 8";
+  }
+  if (/onay|approval|kart|card|reddedilen|red|düştü|dustu|decline/.test(normalized)) {
+    return "SELECT report_date, channel, segment, decline_reason, txn_count, txn_volume_try, approval_rate_pct, rejected_txn_count, lost_volume_try FROM v_card_approval_daily ORDER BY lost_volume_try DESC LIMIT 8";
+  }
+  return "SELECT product_name, segment, channel, txn_count, txn_volume_try, marketplace_volume_try, successful_txn_count FROM v_transaction_volume ORDER BY txn_volume_try DESC LIMIT 10";
+}
+
+llmGatewayService.router.register(testModelProvider);
 
 function context(userId = "user_admin", roles = ["Admin"], granted = Object.values(permissions)): RequestContext {
   return {
@@ -26,14 +86,14 @@ function context(userId = "user_admin", roles = ["Admin"], granted = Object.valu
 
 describe("enterprise safety controls", () => {
   beforeEach(() => {
-    process.env.LLM_PROVIDER = "data-grounded-local";
-    process.env.LLM_MODEL = "data-grounded-local";
-    process.env.TEXT_TO_SQL_MODE = "template";
+    llmGatewayService.router.register(testModelProvider);
+    process.env.LLM_PROVIDER = TEST_PROVIDER_KEY;
+    process.env.LLM_MODEL = TEST_MODEL;
     store.reset();
     store.updateTenantConfig("tenant_fibabanka", {
       modelPolicy: {
-        provider: "data-grounded-local",
-        allowedModels: ["data-grounded-local"],
+        provider: TEST_PROVIDER_KEY,
+        allowedModels: [TEST_MODEL],
         piiMode: "mask_required"
       }
     });
@@ -162,14 +222,12 @@ describe("enterprise safety controls", () => {
     expect(final.result.toolCalls[0]?.toolKey).toBe("query.run");
   });
 
-  it("answers FBDWHPRD customer counts without an OpenAI key by using guarded SQL", async () => {
+  it("does not synthesize FBDWHPRD answers when real OpenAI credentials are missing", async () => {
     const previousProvider = process.env.LLM_PROVIDER;
     const previousModel = process.env.LLM_MODEL;
-    const previousTextToSqlMode = process.env.TEXT_TO_SQL_MODE;
     const previousOpenAiKey = process.env.OPENAI_API_KEY;
     process.env.LLM_PROVIDER = "openai";
     process.env.LLM_MODEL = "gpt-5.4-mini";
-    process.env.TEXT_TO_SQL_MODE = "llm";
     delete process.env.OPENAI_API_KEY;
     store.updateTenantConfig("tenant_fibabanka", {
       modelPolicy: {
@@ -179,19 +237,15 @@ describe("enterprise safety controls", () => {
       }
     });
 
-    let final: any;
     try {
-      for await (const chunk of agentService.streamExecute(context(), {
+      await expect(agentService.execute(context(), {
         agentId: "agent_risk",
         message: "kaç müşteri var bu veri setinde?",
         connectorId: "connector_pg_reporting"
-      })) {
-        if (chunk.event === "done") final = chunk.data;
-      }
+      })).rejects.toThrow(/OPENAI_API_KEY/);
     } finally {
       process.env.LLM_PROVIDER = previousProvider;
       process.env.LLM_MODEL = previousModel;
-      process.env.TEXT_TO_SQL_MODE = previousTextToSqlMode;
       if (previousOpenAiKey === undefined) {
         delete process.env.OPENAI_API_KEY;
       } else {
@@ -199,17 +253,14 @@ describe("enterprise safety controls", () => {
       }
     }
 
-    expect(final.status).toBe("completed");
-    expect(final.response).toContain("2.500");
-    expect(final.result.sql).toContain("v_dataset_summary");
-    expect(final.result.raw.result.rows[0].row_count).toBe(2500);
+    expect(store.snapshot().queryTraces).toHaveLength(0);
   });
 
-  it("routes broad banking topics to allowlisted reporting views", () => {
-    expect(textToSqlService.generateSql("Fraud alert hacmini göster").sql).toContain("v_fraud_alerts");
-    expect(textToSqlService.generateSql("Şube mevduat performansı").sql).toContain("v_branch_kpi");
-    expect(textToSqlService.generateSql("Kampanya dönüşüm oranı").sql).toContain("v_campaign_conversion");
-    expect(textToSqlService.generateSql("Tahsilat bucket bazında nasıl?").sql).toContain("v_collections_snapshot");
+  it("routes broad banking topics to allowlisted reporting views through the model provider", async () => {
+    await expect(textToSqlService.ask(context(), { question: "Fraud alert hacmini göster", execute: false })).resolves.toMatchObject({ sql: expect.stringContaining("v_fraud_alerts") });
+    await expect(textToSqlService.ask(context(), { question: "Şube mevduat performansı", execute: false })).resolves.toMatchObject({ sql: expect.stringContaining("v_branch_kpi") });
+    await expect(textToSqlService.ask(context(), { question: "Kampanya dönüşüm oranı", execute: false })).resolves.toMatchObject({ sql: expect.stringContaining("v_campaign_conversion") });
+    await expect(textToSqlService.ask(context(), { question: "Tahsilat bucket bazında nasıl?", execute: false })).resolves.toMatchObject({ sql: expect.stringContaining("v_collections_snapshot") });
   });
 
   it("uses deterministic synthetic banking fallback when Postgres is unavailable", async () => {

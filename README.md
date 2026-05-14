@@ -27,7 +27,6 @@ Set a fresh server-side OpenAI key in `.env` before asking live agent questions:
 ```bash
 LLM_PROVIDER=openai
 LLM_MODEL=gpt-5.4-mini
-TEXT_TO_SQL_MODE=llm
 TEXT_TO_SQL_MODEL=gpt-5.4-mini
 OPENAI_API_KEY=sk-proj-your-fresh-key
 ```
@@ -124,8 +123,8 @@ curl -s http://localhost:4000/api/v1/sentry/run \
 
 ## Local Placeholders
 
-- LLM calls default to real OpenAI Responses API calls. Tests use an explicit `data-grounded-local` provider so CI does not require an external key.
-- Text-to-SQL defaults to LLM generation; tests can set `TEXT_TO_SQL_MODE=template` for deterministic safety coverage.
+- LLM calls default to real OpenAI Responses API calls.
+- Text-to-SQL always goes through the configured model provider; tests register an explicit provider stub so CI does not require an external key.
 - PostgreSQL connector executes read-only SQL against `DATABASE_URL` when available, then falls back to deterministic synthetic banking rows if local DB is unavailable.
 - Azure OpenAI, Anthropic, Gemini, Vault/KMS, OIDC, SAML, SCIM, SFTP, SharePoint, Slack, Teams, Jira, and email are adapter placeholders.
 - Market intelligence uses governed example data and does not scrape.

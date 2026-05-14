@@ -36,130 +36,6 @@ export type TextToSqlStreamEvent =
 export class TextToSqlService {
   constructor(private readonly repository: PlatformStore) {}
 
-  generateSql(question: string): { sql: string; confidenceScore: number; language: "tr" | "en" } {
-    const normalized = question.toLocaleLowerCase("tr-TR");
-    const language = /[ıİşŞğĞüÜöÖçÇ]/.test(question) ? "tr" : "en";
-    if (isCustomerCountQuestion(normalized)) {
-      return {
-        language,
-        confidenceScore: 0.9,
-        sql: `SELECT metric_name, row_count, description
-FROM v_dataset_summary
-WHERE metric_name = 'customers'
-LIMIT 1`
-      };
-    }
-    if (/şikayet|sikayet|complaint|servis|hizmet|çözüm|cozum|nps/.test(normalized)) {
-      return {
-        language,
-        confidenceScore: 0.82,
-        sql: `SELECT topic, priority, complaint_count, open_cases, avg_resolution_hours, digital_share_pct
-FROM v_complaint_quality
-ORDER BY complaint_count DESC
-LIMIT 8`
-      };
-    }
-    if (/fraud|dolandır|dolandir|sahte|alarm|uyarı|uyari|alert/.test(normalized)) {
-      return {
-        language,
-        confidenceScore: 0.82,
-        sql: `SELECT fraud_type, severity, alert_count, confirmed_count, amount_at_risk_try, confirmed_amount_try
-FROM v_fraud_alerts
-ORDER BY amount_at_risk_try DESC
-LIMIT 8`
-      };
-    }
-    if (/tahsilat|collections|gecikmiş|gecikmis|dpd|recovery|geri ödeme|geri odeme/.test(normalized)) {
-      return {
-        language,
-        confidenceScore: 0.81,
-        sql: `SELECT segment, bucket, case_count, exposure_try, recovered_try, recovery_rate_pct, promise_to_pay_count
-FROM v_collections_snapshot
-ORDER BY exposure_try DESC
-LIMIT 8`
-      };
-    }
-    if (/kampanya|campaign|conversion|dönüşüm|donusum|opt[- ]?out/.test(normalized)) {
-      return {
-        language,
-        confidenceScore: 0.8,
-        sql: `SELECT campaign_name, segment, channel, impressions, clicks, conversions, conversion_rate_pct, revenue_try, opt_out_count
-FROM v_campaign_conversion
-ORDER BY revenue_try DESC
-LIMIT 8`
-      };
-    }
-    if (/şube|sube|branch|nps|satış|satis|mevduat/.test(normalized)) {
-      return {
-        language,
-        confidenceScore: 0.8,
-        sql: `SELECT branch_region, branch_name, active_customers, deposit_balance_try, loan_balance_try, new_products_sold, complaint_count, nps_score
-FROM v_branch_kpi
-ORDER BY deposit_balance_try DESC
-LIMIT 8`
-      };
-    }
-    if (/rakip|competitor|pazar|market|faiz oran|interest rate|karşılaştır|karsilastir/.test(normalized)) {
-      return {
-        language,
-        confidenceScore: 0.79,
-        sql: `SELECT rate_date, competitor, product_name, interest_rate_pct, internal_rate_pct, spread_bps, confidence_score
-FROM v_market_rate_comparison
-ORDER BY rate_date DESC, spread_bps DESC
-LIMIT 8`
-      };
-    }
-    if (/npl|takip|risk|temerrüt|temerrut|gecikme|kredi|loan/.test(normalized)) {
-      return {
-        language,
-        confidenceScore: 0.82,
-        sql: `SELECT product_name, segment, risk_band, active_customer_count, exposure_try, overdue_balance_try, npl_ratio_pct, early_warning_count
-FROM v_credit_risk_snapshot
-ORDER BY overdue_balance_try DESC
-LIMIT 8`
-      };
-    }
-    if (/onay|approval|kart|card|reddedilen|red|düştü|dustu|decline/.test(normalized)) {
-      return {
-        language,
-        confidenceScore: 0.78,
-        sql: `SELECT report_date, channel, segment, decline_reason, txn_count, txn_volume_try, approval_rate_pct, rejected_txn_count, lost_volume_try
-FROM v_card_approval_daily
-WHERE report_date >= CURRENT_DATE - INTERVAL '30 days'
-ORDER BY lost_volume_try DESC
-LIMIT 8`
-      };
-    }
-    if (/retention|tutunma|mobil|kohort|cohort/.test(normalized)) {
-      return {
-        language,
-        confidenceScore: 0.8,
-        sql: `SELECT cohort_month, segment, acquisition_channel, active_customers, retained_30d_pct, retained_90d_pct, expected_revenue_try, churn_risk_score
-FROM v_mobile_retention
-ORDER BY expected_revenue_try DESC
-LIMIT 8`
-      };
-    }
-    if (/müşteri|musteri|customer|segment|şehir|sehir|city|bakiye|balance/.test(normalized)) {
-      return {
-        language,
-        confidenceScore: 0.76,
-        sql: `SELECT segment, city, customer_count, active_customer_count, avg_total_balance_try, avg_risk_score, avg_products
-FROM v_customer_360
-ORDER BY customer_count DESC
-LIMIT 10`
-      };
-    }
-    return {
-      language,
-      confidenceScore: 0.74,
-      sql: `SELECT product_name, segment, channel, txn_count, txn_volume_try, marketplace_volume_try, successful_txn_count
-FROM v_transaction_volume
-ORDER BY txn_volume_try DESC
-LIMIT 10`
-    };
-  }
-
   async ask(context: RequestContext, input: NaturalLanguageQueryInput): Promise<SqlGenerationResult> {
     let final: SqlGenerationResult | undefined;
     for await (const chunk of this.askStream(context, input)) {
@@ -171,37 +47,31 @@ LIMIT 10`
 
   async *askStream(context: RequestContext, input: NaturalLanguageQueryInput): AsyncIterable<TextToSqlStreamEvent> {
     const connector = this.resolveConnector(context, input.connectorId);
-    let generated: { sql: string; confidenceScore: number; language: "tr" | "en"; generator: "openai" | "template" };
-    const shouldUseTemplate = process.env.TEXT_TO_SQL_MODE === "template" ||
-      !hasOpenAiCredential(context) ||
-      isCustomerCountQuestion(input.question.toLocaleLowerCase("tr-TR"));
-    if (shouldUseTemplate) {
-      generated = { ...this.generateSql(input.question), generator: "template" };
-      for (const token of splitSqlForStreaming(generated.sql)) {
+    const language: "tr" | "en" = /[ıİşŞğĞüÜöÖçÇ]/.test(input.question) ? "tr" : "en";
+    let text = "";
+    for await (const chunk of llmGatewayService.streamPrompt(context, {
+      promptKey: "text_to_sql",
+      model: process.env.TEXT_TO_SQL_MODEL ?? process.env.LLM_MODEL,
+      variables: {
+        question: input.question,
+        schema_context: buildSchemaContext(connector),
+        business_context: buildBusinessContext()
+      },
+      piiMasked: true
+    })) {
+      if (chunk.event === "token") {
+        const token = String(chunk.data.token ?? "");
+        text += token;
         yield { event: "sql_delta", data: { token } };
       }
-    } else {
-      const language = /[ıİşŞğĞüÜöÖçÇ]/.test(input.question) ? "tr" : "en";
-      let text = "";
-      for await (const chunk of llmGatewayService.streamPrompt(context, {
-        promptKey: "text_to_sql",
-        model: process.env.TEXT_TO_SQL_MODEL ?? process.env.LLM_MODEL,
-        variables: {
-          question: input.question,
-          schema_context: buildSchemaContext(connector),
-          business_context: buildBusinessContext()
-        },
-        piiMasked: true
-      })) {
-        if (chunk.event === "token") {
-          const token = String(chunk.data.token ?? "");
-          text += token;
-          yield { event: "sql_delta", data: { token } };
-        }
-      }
-      generated = { sql: normalizeGeneratedSql(text), confidenceScore: 0.86, language, generator: "openai" };
-      if (!generated.sql) throw blocked("OpenAI did not return SQL for the text-to-SQL request.");
     }
+    const generated: { sql: string; confidenceScore: number; language: "tr" | "en"; generator: "model" } = {
+      sql: normalizeGeneratedSql(text),
+      confidenceScore: 0.86,
+      language,
+      generator: "model"
+    };
+    if (!generated.sql) throw blocked("The model did not return SQL for the text-to-SQL request.");
     const sql = normalizeGeneratedSql(generated.sql);
     const sqlSafety = validateSqlAgainstConnector(sql, connector);
     if (!sqlSafety.ok) throw blocked(sqlSafety.reason);
@@ -342,17 +212,4 @@ function normalizeGeneratedSql(text: string): string {
     .trim()
     .replace(/;+\s*$/g, "")
     .trim();
-}
-
-function splitSqlForStreaming(sql: string): string[] {
-  return sql.split(/(\s+|,\s*)/).filter(Boolean);
-}
-
-function hasOpenAiCredential(context: RequestContext): boolean {
-  return Boolean(process.env.OPENAI_API_KEY || context.openAiApiKey);
-}
-
-function isCustomerCountQuestion(normalizedQuestion: string): boolean {
-  return /(?:kaç|kac|sayı|sayısı|sayisi|adet|count).*(?:müşteri|musteri|customer)/.test(normalizedQuestion) ||
-    /(?:müşteri|musteri|customer).*(?:kaç|kac|sayı|sayısı|sayisi|adet|count)/.test(normalizedQuestion);
 }

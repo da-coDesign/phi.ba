@@ -320,20 +320,6 @@ export class AgentService {
       return;
     }
 
-    if (toolResult.sql?.includes("v_dataset_summary") && toolResult.answer) {
-      for await (const token of tokenize(toolResult.answer)) {
-        yield token;
-      }
-      return;
-    }
-
-    if (!hasModelCredential(context) && toolResult.answer) {
-      for await (const token of tokenize(toolResult.answer)) {
-        yield token;
-      }
-      return;
-    }
-
     let response = "";
     let promptTraceId = "";
     for await (const chunk of llmGatewayService.streamPrompt(context, {
@@ -534,10 +520,6 @@ function trimToolResultForPrompt(result: AgentToolResult): JsonRecord {
     citations: result.citations?.slice(0, 3),
     approvalRequestId: result.approvalRequestId
   };
-}
-
-function hasModelCredential(context: RequestContext): boolean {
-  return process.env.LLM_PROVIDER === "data-grounded-local" || Boolean(process.env.OPENAI_API_KEY || context.openAiApiKey);
 }
 
 function extractRate(message: string): number | undefined {

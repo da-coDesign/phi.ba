@@ -10,7 +10,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 } /*EDITMODE-END*/;
 
 const STORAGE_KEYS = {
-  boards: "phi.ba.board-items.v1",
+  boards: "phi.ba.board-items.v2",
   source: "phi.ba.selected-source.v1"
 };
 
@@ -41,15 +41,6 @@ const SAMPLE_PROMPTS = [
   "18 Nisan'da kart onay oranı neden düştü?",
   "Mobil bankacılıktan gelen müşterilerin 90 günlük tutunması"
 ];
-
-const THINKING_STEPS = [
-  "Soruyu netleştiriyorum",
-  "Şema ve metrikleri kontrol ediyorum",
-  "En doğru sorgu planını kuruyorum"
-];
-
-const THINKING_MIN_MS = 1600;
-const THINKING_MAX_MS = 3400;
 
 const ACTION_DEFS = {
   jira: {
@@ -112,217 +103,12 @@ const ACTION_FORM_FIELDS = {
   ]
 };
 
-const RESULT_TEMPLATES = [
-  {
-    id: "segments",
-    match: /(işlem hacmi|kullanılan|segment|top 10|en çok|ürün)/i,
-    category: "reporting",
-    recommendedAction: "deck",
-    audience: "Ürün, segment ve yönetim ekipleri",
-    intro: "`islemler` tablosu `musteriler` ve `urunler` ile birleştirildi, son 30 güne filtrelendi. Başarısız ve iade işlemleri hariç tutuldu.",
-    sql: `SELECT
-  u.ad                AS urun,
-  m.segment           AS segment,
-  COUNT(*)            AS islem_adedi,
-  SUM(i.tutar)        AS islem_hacmi
-FROM islemler i
-JOIN musteriler m ON m.id = i.musteri_id
-JOIN urunler   u ON u.id = i.urun_id
-WHERE i.gerceklesme_tarihi >= NOW() - INTERVAL '30 days'
-  AND i.durum = 'basarili'
-GROUP BY 1, 2
-ORDER BY islem_hacmi DESC
-LIMIT 10;`,
-    tables: ["islemler", "musteriler", "urunler"],
-    columns: [
-      { label: "ürün", type: "text" },
-      { label: "segment", type: "tag" },
-      { label: "işlem adedi", type: "count", align: "right" },
-      { label: "hacim", type: "currency", align: "right" }
-    ],
-    baseRows: [
-      ["Kredi Kartı — Premium", "Üst Gelir", 184210, 91428000],
-      ["Konut Kredisi", "Bireysel", 9120, 76452000],
-      ["Vadeli Mevduat (TL)", "Üst Gelir", 41820, 62580000],
-      ["EFT/Havale", "KOBİ", 312400, 58500000],
-      ["Ticari Kredi", "KOBİ", 6210, 51000000],
-      ["İhtiyaç Kredisi", "Bireysel", 28940, 47894000],
-      ["Kredi Kartı — Standart", "Bireysel", 510420, 42840000],
-      ["Yatırım Fonu", "Üst Gelir", 18400, 36800000]
-    ],
-    buildInsight(rows, delta) {
-      const lead = rows[0];
-      const direction = delta >= 0 ? "yukarıda" : "aşağıda";
-      return `${lead[1]} segmenti liderliği sürdürüyor. ${lead[0]} bir önceki yenilemeye göre **%${Math.abs(delta)}** ${direction}; portföy dağılımı sunumlaştırmaya hazır.`;
-    },
-    buildStats(rows, delta) {
-      return [
-        { label: "Toplam hacim", type: "currency", value: sumNumericColumn(rows, 3) },
-        { label: "Lider segment", type: "text", value: rows[0][1] },
-        { label: "Haftalık delta", type: "delta", value: delta }
-      ];
-    }
-  },
-  {
-    id: "npl",
-    match: /(npl|takip|risk|temerrüt|gecikme)/i,
-    category: "ops",
-    recommendedAction: "jira",
-    audience: "Risk, tahsilat ve ürün operasyon ekipleri",
-    intro: "`kredi_portfoy` ve `risk_izleme` tabloları çeyreklik görünümde birleştirildi. Aktif ürünler içinde en yüksek NPL baskısı taşıyan segmentler öne çıkarıldı.",
-    sql: `SELECT
-  urun_adi,
-  segment,
-  npl_orani,
-  aktif_musteri,
-  riskli_bakiye
-FROM risk_izleme
-WHERE rapor_donemi = DATE_TRUNC('quarter', CURRENT_DATE)
-ORDER BY riskli_bakiye DESC
-LIMIT 8;`,
-    tables: ["kredi_portfoy", "risk_izleme"],
-    columns: [
-      { label: "ürün", type: "text" },
-      { label: "segment", type: "tag" },
-      { label: "NPL", type: "percent", align: "right" },
-      { label: "aktif müşteri", type: "count", align: "right" },
-      { label: "riskli bakiye", type: "currency", align: "right" }
-    ],
-    baseRows: [
-      ["Ticari Kredi", "KOBİ", 8.4, 6210, 31800000],
-      ["İhtiyaç Kredisi", "Bireysel", 6.9, 28940, 26750000],
-      ["KMH", "Bireysel", 5.8, 198800, 24900000],
-      ["POS Finansmanı", "KOBİ", 5.1, 8120, 18700000],
-      ["Taşıt Kredisi", "Bireysel", 4.7, 5540, 16300000],
-      ["Tedarik Zinciri", "Kurumsal", 4.2, 1410, 15200000]
-    ],
-    buildInsight(rows, delta) {
-      const lead = rows[0];
-      const pressure = delta >= 0 ? "artış eğiliminde" : "bir miktar gevşemiş";
-      return `${lead[0]} tarafında NPL baskısı öne çıkıyor. Riskli bakiye ${pressure}; ilk ürün için oran **%${lead[2].toFixed(1).replace(".", ",")}** seviyesinde ve hızlı operasyon takibi gerektiriyor.`;
-    },
-    buildStats(rows, delta) {
-      return [
-        { label: "Riskli bakiye", type: "currency", value: sumNumericColumn(rows, 4) },
-        { label: "En yüksek NPL", type: "percent", value: rows[0][2] },
-        { label: "Trend", type: "delta", value: delta }
-      ];
-    }
-  },
-  {
-    id: "approval",
-    match: /(onay oranı|neden düştü|düştü|kart onay|reddedilen|approval)/i,
-    category: "ops",
-    recommendedAction: "jira",
-    audience: "Ödeme sistemleri, fraud ve kanal ekipleri",
-    intro: "`kart_islemleri` akışı kanal ve saat diliminde kırıldı. Düşen onay oranı ile ilişkili reddedilen işlem ve kayıp hacim hesaplandı.",
-    sql: `SELECT
-  kanal,
-  saat_dilimi,
-  onay_orani,
-  reddedilen_islem,
-  kayip_hacim
-FROM kart_islemleri
-WHERE islem_tarihi = CURRENT_DATE - INTERVAL '12 days'
-ORDER BY kayip_hacim DESC
-LIMIT 8;`,
-    tables: ["kart_islemleri", "fraud_log"],
-    columns: [
-      { label: "kanal", type: "text" },
-      { label: "saat dilimi", type: "tag" },
-      { label: "onay oranı", type: "percent", align: "right" },
-      { label: "reddedilen işlem", type: "count", align: "right" },
-      { label: "kayıp hacim", type: "currency", align: "right" }
-    ],
-    baseRows: [
-      ["Sanal POS", "18:00-20:00", 71.8, 21840, 12100000],
-      ["Mobil", "20:00-22:00", 74.2, 18210, 10300000],
-      ["Marketplace", "17:00-19:00", 76.1, 14900, 8400000],
-      ["Web Checkout", "21:00-23:00", 77.4, 11820, 6220000],
-      ["Kiosk", "12:00-14:00", 81.3, 4120, 2080000]
-    ],
-    buildInsight(rows, delta) {
-      const lead = rows[0];
-      return `${lead[0]} kanalında ${lead[1]} bandı baskı altında. Kayıp hacim bir önceki yenilemeye göre **%${Math.abs(delta)}** ${delta >= 0 ? "artmış" : "azalmış"} görünüyor; olay akışı ticket'a dönüştürülmeli.`;
-    },
-    buildStats(rows, delta) {
-      return [
-        { label: "En düşük onay", type: "percent", value: rows[0][2] },
-        { label: "Reddedilen işlem", type: "count", value: sumNumericColumn(rows, 3) },
-        { label: "Kayıp hacim", type: "currency", value: sumNumericColumn(rows, 4) }
-      ];
-    }
-  },
-  {
-    id: "retention",
-    match: /(tutunma|mobil|kampanya|müşteri|cohort|kohort)/i,
-    category: "growth",
-    recommendedAction: "email",
-    audience: "CRM, growth ve dijital bankacılık ekipleri",
-    intro: "`mobil_kullanim` ve `kampanya_etkisi` tabloları kohort bazında eşlendi. 90 günlük tutunma ile beklenen gelir potansiyeli birlikte modellendi.",
-    sql: `SELECT
-  kohort,
-  segment,
-  retention_90d,
-  aktif_musteri,
-  beklenen_gelir
-FROM mobil_kullanim
-WHERE edinim_kanali = 'mobil'
-ORDER BY beklenen_gelir DESC
-LIMIT 8;`,
-    tables: ["mobil_kullanim", "kampanya_etkisi"],
-    columns: [
-      { label: "kohort", type: "text" },
-      { label: "segment", type: "tag" },
-      { label: "90g tutunma", type: "percent", align: "right" },
-      { label: "aktif müşteri", type: "count", align: "right" },
-      { label: "beklenen gelir", type: "currency", align: "right" }
-    ],
-    baseRows: [
-      ["Son 30 gün", "Üst Gelir", 68.4, 18400, 17800000],
-      ["31-60 gün", "Bireysel", 61.7, 42100, 15200000],
-      ["61-90 gün", "KOBİ", 57.9, 12840, 11400000],
-      ["91-120 gün", "Genç", 52.8, 33720, 9800000],
-      ["121-150 gün", "Yeni Maaş", 48.3, 18560, 7300000]
-    ],
-    buildInsight(rows, delta) {
-      const lead = rows[0];
-      return `${lead[1]} segmenti mobil tarafta en güçlü fırsatı taşıyor. Beklenen gelir potansiyeli **${formatMetric(sumNumericColumn(rows, 4), "currency")}** seviyesinde; veri kampanya brief'ine çevrilebilir.`;
-    },
-    buildStats(rows, delta) {
-      return [
-        { label: "Ort. tutunma", type: "percent", value: averageNumericColumn(rows, 2) },
-        { label: "Aktif müşteri", type: "count", value: sumNumericColumn(rows, 3) },
-        { label: "Potansiyel delta", type: "delta", value: delta }
-      ];
-    }
-  }
-];
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function hashString(value) {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash << 5) - hash + value.charCodeAt(i);
-    hash |= 0;
-  }
-  return Math.abs(hash);
-}
-
 function createId(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function sumNumericColumn(rows, columnIndex) {
   return rows.reduce((total, row) => total + (Number(row[columnIndex]) || 0), 0);
-}
-
-function averageNumericColumn(rows, columnIndex) {
-  if (!rows.length) return 0;
-  return sumNumericColumn(rows, columnIndex) / rows.length;
 }
 
 function formatMetric(value, type) {
@@ -373,13 +159,6 @@ function removeMarkdown(value) {
   return String(value || "").replace(/\*\*/g, "");
 }
 
-function getThinkingDuration(text) {
-  return Math.max(
-    THINKING_MIN_MS,
-    Math.min(THINKING_MAX_MS, 1250 + text.trim().length * 32)
-  );
-}
-
 function getMetricColumnIndex(columns) {
   for (let i = columns.length - 1; i >= 0; i -= 1) {
     const type = columns[i].type;
@@ -390,107 +169,72 @@ function getMetricColumnIndex(columns) {
   return columns.length - 1;
 }
 
-function pickTemplate(question) {
-  return RESULT_TEMPLATES.find((template) => template.match.test(question)) || RESULT_TEMPLATES[0];
-}
-
-function buildDelta(seed, revision, category) {
-  const base = (seed % 11) + revision * 2 + 4;
-  if (category === "ops") return base;
-  return base - 3;
-}
-
-function buildRows(template, seed, revision) {
-  return template.baseRows.map((row, rowIndex) =>
-    row.map((cell, cellIndex) => {
-      if (typeof cell !== "number") return cell;
-      const column = template.columns[cellIndex];
-      const jitter = ((seed + rowIndex * 17 + cellIndex * 11 + revision * 13) % 9) - 4;
-      if (column.type === "percent") {
-        const direction = template.category === "ops" ? -1 : 1;
-        return Number(
-          clamp(cell + direction * revision * 0.45 + jitter * 0.12, 0.8, 99.2).toFixed(1)
-        );
-      }
-      const scale = 1 + revision * 0.018 + jitter * 0.006;
-      if (column.type === "count") {
-        return Math.max(1, Math.round(cell * scale));
-      }
-      if (column.type === "currency") {
-        return Math.max(1000, Math.round(cell * scale / 1000) * 1000);
-      }
-      return cell;
-    })
-  );
-}
-
-function generateMockResult(question, revision = 0) {
-  const template = pickTemplate(question);
-  const seed = hashString(`${template.id}:${question}`);
-  const rows = buildRows(template, seed, revision);
-  const delta = buildDelta(seed, revision, template.category);
-  return {
-    question,
-    intro: template.intro,
-    sql: template.sql,
-    tables: template.tables,
-    columns: template.columns,
-    rows,
-    insight: template.buildInsight(rows, delta),
-    stats: template.buildStats(rows, delta),
-    latencyMs: 210 + (seed % 290),
-    category: template.category,
-    recommendedAction: template.recommendedAction,
-    audience: template.audience,
-    revision,
-    generatedAt: new Date().toISOString()
-  };
-}
-
-function buildAgentResult(question, answer, fallbackRevision = 0, finalPayload) {
-  const base = generateMockResult(question, fallbackRevision);
+function buildAgentResult(question, answer, finalPayload) {
   const serverResult = finalPayload && finalPayload.result;
   if (serverResult) {
     const rows = Array.isArray(serverResult.rows) ? serverResult.rows : [];
     const columns = Array.isArray(serverResult.columns) ? serverResult.columns : [];
     const mode = serverResult.mode || (rows.length ? "data_card" : "text");
+    const agentAnswer = String(finalPayload.response || serverResult.answer || answer || "");
     return {
-      ...base,
       mode,
       question,
-      intro: serverResult.answer || answer || base.intro,
+      intro: agentAnswer || "Agent yanıtı tamamlandı.",
       sql: serverResult.sql || "",
       tables: serverResult.tables || inferTablesFromSql(serverResult.sql || ""),
       columns,
       rows,
       stats: Array.isArray(serverResult.stats) && serverResult.stats.length ? serverResult.stats : buildStatsFromServerRows(rows, columns),
-      insight: serverResult.answer || answer || base.insight,
-      agentAnswer: serverResult.answer || answer,
+      insight: agentAnswer,
+      agentAnswer,
       citations: serverResult.citations || [],
       toolCalls: serverResult.toolCalls || [],
       approvalRequestId: serverResult.approvalRequestId || "",
-      category: serverResult.category || base.category,
-      recommendedAction: serverResult.recommendedAction || base.recommendedAction,
+      category: serverResult.category || inferResultCategory(question, serverResult),
+      recommendedAction: serverResult.recommendedAction || inferRecommendedAction(question, serverResult),
       boardable: serverResult.boardable !== false && rows.length > 0,
       latencyMs: Math.max(120, Math.min(1800, String(answer || "").length * 3)),
+      traceId: finalPayload.traceId || serverResult.traceId || "",
+      audience: serverResult.audience || "Veri ve karar ekipleri",
       generatedAt: new Date().toISOString()
     };
   }
   return {
-    ...base,
     mode: "text",
+    question,
     columns: [],
     rows: [],
     stats: [],
     sql: "",
     tables: [],
-    intro: answer || base.intro,
-    insight: answer || base.insight,
+    intro: answer || "Agent yanıtı tamamlandı ancak server sonucu dönmedi.",
+    insight: answer || "",
     agentAnswer: answer,
+    citations: [],
+    toolCalls: [],
+    approvalRequestId: "",
+    category: "reporting",
+    recommendedAction: "deck",
     boardable: false,
     latencyMs: Math.max(120, Math.min(1800, answer.length * 3)),
+    traceId: "",
+    audience: "Veri ve karar ekipleri",
     generatedAt: new Date().toISOString()
   };
+}
+
+function inferResultCategory(question, result) {
+  const text = `${question} ${result?.toolKey || ""}`.toLocaleLowerCase("tr-TR");
+  if (/npl|risk|onay|approval|düştü|dustu|fraud|şikayet|sikayet|tahsilat|jira/.test(text)) return "ops";
+  if (/kampanya|campaign|retention|tutunma|mobil/.test(text)) return "growth";
+  return "reporting";
+}
+
+function inferRecommendedAction(question, result) {
+  const category = inferResultCategory(question, result);
+  if (category === "ops") return "jira";
+  if (category === "growth") return "email";
+  return "deck";
 }
 
 function inferTablesFromSql(sql) {
@@ -606,6 +350,10 @@ function buildActionSummary(actionType, payload) {
   return `${payload.deckTitle} sunum iskeleti oluşturuldu`;
 }
 
+function getBoardRevision(item) {
+  return (item.refreshCount || 0) + 1;
+}
+
 function getPrimaryBoardView(messages) {
   return messages.length ? "convo" : "home";
 }
@@ -625,13 +373,18 @@ function readStoredBoardItems() {
   }
 }
 
-function refreshBoardItemData(item) {
-  const nextRevision = (item.result?.revision || 0) + 1;
-  const nextResult = generateMockResult(item.queryText, nextRevision);
+async function refreshBoardItemData(item, source) {
+  const finalPayload = await streamAgentAnswer(item.queryText, item.source || source || DEFAULT_DATA_SOURCE, () => {});
+  const answer = String(finalPayload?.response || "");
+  const nextResult = buildAgentResult(item.queryText, answer, finalPayload);
+  if (!nextResult.rows.length || !nextResult.columns.length) {
+    throw new Error("Agent refresh did not return a data card");
+  }
   return {
     ...item,
     result: nextResult,
-    lastRefreshedAt: nextResult.generatedAt
+    lastRefreshedAt: nextResult.generatedAt,
+    refreshCount: (item.refreshCount || 0) + 1
   };
 }
 
@@ -1136,15 +889,6 @@ function AgentModeCard({ result }) {
 }
 
 function ThinkingMessage({ content }) {
-  const [stepIndex, setStepIndex] = useState(0);
-
-  useEffect(() => {
-    const tick = window.setInterval(() => {
-      setStepIndex((current) => (current + 1) % THINKING_STEPS.length);
-    }, 850);
-    return () => window.clearInterval(tick);
-  }, []);
-
   return (
     <div className="msg msg-agent">
       <div className="agent-avatar">
@@ -1163,8 +907,8 @@ function ThinkingMessage({ content }) {
             <div className="streaming-answer">{content}</div>
           ) : (
             <>
-              <div className="thinking-title">{THINKING_STEPS[stepIndex]}</div>
-              <div className="thinking-sub">Yanıtı hemen dökmek yerine önce soruyu anlamlandırıp panoya taşınabilecek en tutarlı cevabı hazırlıyorum.</div>
+              <div className="thinking-title">Canlı agent bağlantısı kuruluyor</div>
+              <div className="thinking-sub">SSE akışı açılıyor; SQL, araç ve yanıt adımları backend'den geldikçe burada görünecek.</div>
               <div className="thinking-dots" aria-hidden="true">
                 <span />
                 <span />
@@ -1340,7 +1084,7 @@ function BoardCard({ item, onOpen, onRefresh, onOpenAction }) {
 
       <div className="board-card-meta">
         <span><Icon name="clock" size={11} />{formatRelativeTime(item.lastRefreshedAt)}</span>
-        <span><Icon name="bookmark" size={11} />rev {item.result.revision + 1}</span>
+        <span><Icon name="bookmark" size={11} />rev {getBoardRevision(item)}</span>
       </div>
 
       {lastAction &&
@@ -1579,8 +1323,6 @@ function App() {
   const [drawer, setDrawer] = useState(null);
   const [selectedSource, setSelectedSource] = useState(() => window.localStorage.getItem(STORAGE_KEYS.source) || DEFAULT_DATA_SOURCE);
   const [hasOpenAiKey, setHasOpenAiKey] = useState(() => Boolean(window.localStorage.getItem(OPENAI_KEY_STORAGE)));
-  const timeoutsRef = useRef(new Map());
-  const prevViewRef = useRef("home");
 
   useEffect(() => {
     document.documentElement.style.setProperty("--brand", tweaks.primaryColor);
@@ -1601,18 +1343,6 @@ function App() {
     const timeoutId = window.setTimeout(() => setBoardNotice(""), 4200);
     return () => window.clearTimeout(timeoutId);
   }, [boardNotice]);
-
-  useEffect(() => () => {
-    timeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
-    timeoutsRef.current.clear();
-  }, []);
-
-  useEffect(() => {
-    if (view === "boards" && prevViewRef.current !== "boards" && boardItems.length) {
-      setBoardItems((items) => items.map(refreshBoardItemData));
-    }
-    prevViewRef.current = view;
-  }, [boardItems.length, view]);
 
   useEffect(() => {
     if (drawer && !boardItems.find((item) => item.id === drawer.itemId)) {
@@ -1650,7 +1380,7 @@ function App() {
       const answer = String(finalPayload?.response || streamed || "");
       setMessages((current) =>
         current.map((message) =>
-          message.id === id ? { ...message, status: "done", result: buildAgentResult(text, answer, 0, finalPayload), streamText: "" } : message
+          message.id === id ? { ...message, status: "done", result: buildAgentResult(text, answer, finalPayload), streamText: "" } : message
         )
       );
     } catch (error) {
@@ -1700,8 +1430,6 @@ function App() {
   };
 
   const newThread = () => {
-    timeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
-    timeoutsRef.current.clear();
     setMessages([]);
     setView("home");
     setDrawer(null);
@@ -1738,9 +1466,11 @@ function App() {
       sourceMessageId: target.id,
       title: target.text,
       queryText: target.text,
+      source: selectedSource,
       result: target.result,
       savedAt: new Date().toISOString(),
       lastRefreshedAt: target.result.generatedAt,
+      refreshCount: 0,
       actionHistory: []
     };
 
@@ -1749,14 +1479,35 @@ function App() {
     setBoardNotice("Kart panoya eklendi. Artık Panolar içinde canlı olarak izlenebilir.");
   };
 
-  const refreshBoardItem = (itemId) => {
-    setBoardItems((current) => current.map((item) => item.id === itemId ? refreshBoardItemData(item) : item));
-    setBoardNotice("Kart güncellendi; küçük tablo yeni veri ile yenilendi.");
+  const refreshBoardItem = async (itemId) => {
+    const target = boardItems.find((item) => item.id === itemId);
+    if (!target) return;
+    setBoardNotice("Kart canlı agent üzerinden yenileniyor.");
+    try {
+      const nextItem = await refreshBoardItemData(target, selectedSource);
+      setBoardItems((current) => current.map((item) => item.id === itemId ? nextItem : item));
+      setBoardNotice("Kart canlı agent sonucu ile yenilendi.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Agent refresh unavailable";
+      setBoardNotice(`Kart yenilenemedi: ${message}`);
+    }
   };
 
-  const refreshAllBoards = () => {
-    setBoardItems((current) => current.map(refreshBoardItemData));
-    setBoardNotice("Panodaki tüm kartlar yeni veri ile yenilendi.");
+  const refreshAllBoards = async () => {
+    if (!boardItems.length) return;
+    setBoardNotice("Panodaki kartlar canlı agent üzerinden yenileniyor.");
+    const refreshedItems = [];
+    let failed = 0;
+    for (const item of boardItems) {
+      try {
+        refreshedItems.push(await refreshBoardItemData(item, selectedSource));
+      } catch {
+        failed += 1;
+        refreshedItems.push(item);
+      }
+    }
+    setBoardItems(refreshedItems);
+    setBoardNotice(failed ? `${failed} kart yenilenemedi; diğerleri canlı agent sonucu ile güncellendi.` : "Panodaki tüm kartlar canlı agent sonucu ile yenilendi.");
   };
 
   const openBoardItem = (itemId) => {
