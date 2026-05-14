@@ -1,0 +1,643 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+enum DeploymentMode {
+  ON_PREMISE
+  PRIVATE_CLOUD
+  HYBRID
+  MANAGED_SAAS
+}
+
+enum AuditEventType {
+  AUTH
+  ADMIN_CONFIG
+  CONNECTOR_OPERATION
+  SQL_GENERATION
+  SQL_EXECUTION
+  RAG_INGESTION
+  RAG_RETRIEVAL
+  LLM_CALL
+  AGENT_RUN
+  TOOL_EXECUTION
+  WORKFLOW_ACTION
+  APPROVAL_DECISION
+  SAFETY_GATE
+  EXTERNAL_INGESTION
+  SIMULATION_RUN
+}
+
+enum SafetyGateStatus {
+  PASS
+  WARNING
+  BLOCKED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum JobStatusValue {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum AlertPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Tenant {
+  id             String          @id
+  name           String
+  slug           String          @unique
+  deploymentMode DeploymentMode  @default(ON_PREMISE)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  config         TenantConfig?
+  brand          BrandConfig?
+  featureFlags   FeatureFlag[]
+  users          User[]
+  roles          Role[]
+  auditLogs      AuditLog[]
+}
+
+model TenantConfig {
+  id                  String   @id @default(cuid())
+  tenantId            String   @unique
+  productName         String
+  locale              String   @default("tr-TR")
+  customDomain        String?
+  enabledFeatures     Json
+  industryDomainPack  String
+  modelPolicy         Json
+  dataResidencyPolicy Json
+  securityPolicy      Json
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model BrandConfig {
+  id            String   @id @default(cuid())
+  tenantId      String   @unique
+  productName   String
+  logoUrl       String?
+  primaryColor  String
+  secondaryColor String
+  accentColor   String
+  textColor     String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model FeatureFlag {
+  id        String   @id @default(cuid())
+  tenantId  String
+  key       String
+  enabled   Boolean  @default(false)
+  config    Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, key])
+}
+
+model User {
+  id          String     @id
+  tenantId    String
+  email       String
+  displayName String
+  status      String     @default("active")
+  authType    String     @default("local")
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  roles       UserRole[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Role {
+  id          String           @id
+  tenantId    String
+  name        String
+  description String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model Permission {
+  id          String           @id
+  key         String           @unique
+  description String?
+  createdAt   DateTime         @default(now())
+  roles       RolePermission[]
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model SecretReference {
+  id          String   @id
+  tenantId    String
+  name        String
+  provider    String
+  reference   String
+  purpose     String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model Connector {
+  id              String   @id
+  tenantId        String
+  type            String
+  name            String
+  config          Json
+  secretReferenceId String?
+  status          String   @default("unknown")
+  allowedTables   Json?
+  allowedColumns  Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model BusinessGlossaryTerm {
+  id          String   @id
+  tenantId    String
+  term        String
+  definition  String
+  synonyms    Json
+  locale      String   @default("tr-TR")
+  domain      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, term])
+  @@index([tenantId])
+}
+
+model MetricDefinition {
+  id          String   @id
+  tenantId    String
+  key         String
+  name        String
+  description String
+  formula     String
+  sqlMappingHints Json
+  tableMapping Json
+  columnMapping Json
+  synonyms    Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+model QueryTrace {
+  id              String   @id
+  tenantId        String
+  userId          String
+  question        String
+  language        String
+  generatedSql    String?
+  safetyStatus    SafetyGateStatus
+  confidenceScore Float?
+  resultSummary   String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+model Document {
+  id          String   @id
+  tenantId    String
+  title       String
+  sourceType  String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  chunks      DocumentChunk[]
+
+  @@index([tenantId])
+}
+
+model DocumentChunk {
+  id         String                  @id
+  tenantId   String
+  documentId String
+  content    String
+  chunkIndex Int
+  embedding  Unsupported("vector")?
+  metadata   Json?
+  createdAt  DateTime                @default(now())
+  document   Document                @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model VectorIndex {
+  id             String   @id
+  tenantId       String
+  name           String
+  provider       String   @default("pgvector")
+  freshnessAt    DateTime?
+  documentCount  Int      @default(0)
+  chunkCount     Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([tenantId, name])
+}
+
+model Prompt {
+  id          String          @id
+  tenantId    String
+  key         String
+  name        String
+  description String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  versions    PromptVersion[]
+
+  @@unique([tenantId, key])
+}
+
+model PromptVersion {
+  id        String   @id
+  promptId  String
+  version   Int
+  body      String
+  metadata  Json?
+  createdAt DateTime @default(now())
+  prompt    Prompt   @relation(fields: [promptId], references: [id], onDelete: Cascade)
+
+  @@unique([promptId, version])
+}
+
+model PromptExecutionTrace {
+  id            String   @id
+  tenantId      String
+  promptKey     String
+  promptVersion Int
+  model         String
+  input         Json
+  output        Json?
+  status        String
+  tokenUsage    Json?
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+model ModelUsage {
+  id             String   @id
+  tenantId       String
+  provider       String
+  model          String
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  operation      String
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+model AgentTemplate {
+  id          String   @id
+  tenantId    String
+  name        String
+  description String
+  defaultTools Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, name])
+}
+
+model Agent {
+  id          String   @id
+  tenantId    String
+  name        String
+  templateId  String?
+  instructions String
+  enabled     Boolean  @default(true)
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, name])
+}
+
+model Tool {
+  id          String   @id
+  key         String   @unique
+  name        String
+  riskLevel   String
+  description String?
+  createdAt   DateTime @default(now())
+}
+
+model ToolPermission {
+  id        String   @id
+  tenantId  String
+  roleId    String
+  toolKey   String
+  allowed   Boolean  @default(false)
+  requiresApproval Boolean @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, roleId, toolKey])
+}
+
+model AgentExecutionTrace {
+  id          String   @id
+  tenantId    String
+  userId      String
+  agentId     String
+  input       Json
+  output      Json?
+  toolCalls   Json?
+  safetyStatus SafetyGateStatus
+  status      String
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+model Workflow {
+  id          String   @id
+  tenantId    String
+  name        String
+  description String?
+  steps       Json
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, name])
+}
+
+model Action {
+  id          String   @id
+  tenantId    String
+  workflowId  String?
+  type        String
+  payload     Json
+  riskLevel   String
+  status      String
+  rollbackPlan Json?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+model ApprovalRequest {
+  id          String         @id
+  tenantId    String
+  requestedBy String
+  actionType  String
+  subjectId   String
+  reason      String
+  status      ApprovalStatus @default(PENDING)
+  decidedBy   String?
+  decisionNote String?
+  decidedAt   DateTime?
+  createdAt   DateTime       @default(now())
+
+  @@index([tenantId, status])
+}
+
+model MetricSubscription {
+  id          String   @id
+  tenantId    String
+  metricKey   String
+  subscriberUserId String
+  schedule    String
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+model AlertRule {
+  id          String   @id
+  tenantId    String
+  name        String
+  metricKey   String
+  ruleType    String
+  threshold   Float?
+  sensitivity Float?
+  priority    AlertPriority @default(MEDIUM)
+  enabled     Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, name])
+}
+
+model AlertEvent {
+  id          String   @id
+  tenantId    String
+  ruleId      String
+  priority    AlertPriority
+  title       String
+  explanation String
+  dedupeKey   String
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@unique([tenantId, dedupeKey])
+}
+
+model ExternalSource {
+  id          String   @id
+  tenantId    String
+  name        String
+  type        String
+  url         String?
+  governanceApproved Boolean @default(false)
+  rateLimitPerHour Int @default(60)
+  confidenceScore Float @default(0.5)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, name])
+}
+
+model ExternalIngestionJob {
+  id          String   @id
+  tenantId    String
+  sourceId    String
+  status      JobStatusValue
+  normalizedCount Int @default(0)
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+
+  @@index([tenantId, createdAt])
+}
+
+model SimulationScenario {
+  id          String   @id
+  tenantId    String
+  name        String
+  description String
+  parameters  Json
+  requiresApprovalForAction Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, name])
+}
+
+model Segment {
+  id          String   @id
+  tenantId    String
+  name        String
+  definition  Json
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, name])
+}
+
+model SyntheticUserSegment {
+  id          String   @id
+  tenantId    String
+  name        String
+  size        Int
+  attributes  Json
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, name])
+}
+
+model SimulationResult {
+  id          String   @id
+  tenantId    String
+  scenarioId  String
+  input       Json
+  output      Json
+  safetyStatus SafetyGateStatus
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+model SafetyGateCheck {
+  id          String   @id
+  key         String   @unique
+  name        String
+  description String
+  severity    String
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model SafetyGateRun {
+  id            String           @id
+  tenantId      String
+  checkKey      String
+  operationType String
+  operationId   String?
+  status        SafetyGateStatus
+  message       String
+  details       Json?
+  createdAt     DateTime         @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, operationType])
+}
+
+model AuditLog {
+  id            String         @id
+  tenantId      String
+  actorUserId   String?
+  eventType     AuditEventType
+  action        String
+  resourceType  String
+  resourceId    String?
+  correlationId String
+  ipAddress     String?
+  userAgent     String?
+  metadata      Json?
+  createdAt     DateTime       @default(now())
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, eventType])
+}
+
+model ComplianceEvidence {
+  id          String   @id
+  tenantId    String
+  controlKey  String
+  title       String
+  evidence    Json
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, controlKey])
+}
+
+model JobStatus {
+  id          String         @id
+  tenantId    String
+  type        String
+  status      JobStatusValue
+  progress    Int            @default(0)
+  message     String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([tenantId, status])
+}
