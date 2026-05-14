@@ -13,6 +13,14 @@ const STORAGE_KEYS = {
   boards: "phi.ba.board-items.v1"
 };
 
+const API_BASE = window.PHI_BA_API_BASE_URL || "http://localhost:4000";
+const API_HEADERS = {
+  "content-type": "application/json",
+  authorization: "Bearer dev-admin-token",
+  "x-tenant-id": "tenant_fibabanka"
+};
+const DEFAULT_AGENT_ID = "agent_risk";
+
 const SAMPLE_PROMPTS = [
   "Son 30 günde işlem hacmine göre en çok kullanılan 10 segment",
   "Bu çeyrekte en yüksek NPL oranına sahip ürünler hangileri?",
@@ -422,6 +430,60 @@ function generateMockResult(question, revision = 0) {
     audience: template.audience,
     revision,
     generatedAt: new Date().toISOString()
+  };
+}
+
+function buildAgentResult(question, answer, fallbackRevision = 0) {
+  const base = generateMockResult(question, fallbackRevision);
+  return {
+    ...base,
+    intro: answer || base.intro,
+    insight: answer || base.insight,
+    agentAnswer: answer,
+    latencyMs: Math.max(120, Math.min(1800, answer.length * 3)),
+    generatedAt: new Date().toISOString()
+  };
+}
+
+async function streamAgentAnswer(question, onToken) {
+  const response = await fetch(`${API_BASE}/api/v1/agents/${DEFAULT_AGENT_ID}/stream`, {
+    method: "POST",
+    headers: API_HEADERS,
+    body: JSON.stringify({ message: question, toolKey: "rag.retrieve" })
+  });
+  if (!response.ok || !response.body) throw new Error(`Agent stream failed (${response.status})`);
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalPayload = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() || "";
+    for (const frame of frames) {
+      const parsed = parseSseFrame(frame);
+      if (!parsed) continue;
+      if (parsed.event === "token") onToken(String(parsed.data.token || ""));
+      if (parsed.event === "done") finalPayload = parsed.data;
+      if (parsed.event === "error") throw new Error(parsed.data.message || "Agent stream failed");
+    }
+  }
+
+  return finalPayload;
+}
+
+function parseSseFrame(frame) {
+  const lines = frame.split("\n");
+  const eventLine = lines.find((line) => line.startsWith("event:"));
+  const dataLine = lines.find((line) => line.startsWith("data:"));
+  if (!dataLine) return null;
+  return {
+    event: eventLine ? eventLine.slice("event:".length).trim() : "message",
+    data: JSON.parse(dataLine.slice("data:".length).trim())
   };
 }
 
@@ -895,6 +957,7 @@ function UserBubble({ text }) {
 function AgentMessage({ message, showSqlDefault, onSaveToBoard, onOpenBoards }) {
   const saved = message.savedToBoard;
   const saveLabel = saved ? "Panoda" : "Panoya ekle";
+  const answer = message.result.agentAnswer;
 
   return (
     <div className="msg msg-agent">
@@ -905,7 +968,9 @@ function AgentMessage({ message, showSqlDefault, onSaveToBoard, onOpenBoards }) 
         </svg>
       </div>
       <div className="agent-body">
-        <div className="agent-intro">{message.result.intro.split("`").map((segment, index) => index % 2 ? <code key={index}>{segment}</code> : segment)}</div>
+        <div className={answer ? "agent-intro agent-live-answer" : "agent-intro"}>
+          {message.result.intro.split("`").map((segment, index) => index % 2 ? <code key={index}>{segment}</code> : segment)}
+        </div>
         <ResultBlock data={message.result} showSqlDefault={showSqlDefault} />
         <div className="msg-actions">
           <button className="msg-act"><Icon name="thumbs-up" size={13} /></button>
@@ -925,7 +990,7 @@ function AgentMessage({ message, showSqlDefault, onSaveToBoard, onOpenBoards }) 
   );
 }
 
-function ThinkingMessage() {
+function ThinkingMessage({ content }) {
   const [stepIndex, setStepIndex] = useState(0);
 
   useEffect(() => {
@@ -947,15 +1012,21 @@ function ThinkingMessage() {
         <div className="thinking-card">
           <div className="thinking-pill">
             <span className="dot live" />
-            <span>Düşünüyor</span>
+            <span>{content ? "Yanıtlıyor" : "Düşünüyor"}</span>
           </div>
-          <div className="thinking-title">{THINKING_STEPS[stepIndex]}</div>
-          <div className="thinking-sub">Yanıtı hemen dökmek yerine önce soruyu anlamlandırıp panoya taşınabilecek en tutarlı cevabı hazırlıyorum.</div>
-          <div className="thinking-dots" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
+          {content ? (
+            <div className="streaming-answer">{content}</div>
+          ) : (
+            <>
+              <div className="thinking-title">{THINKING_STEPS[stepIndex]}</div>
+              <div className="thinking-sub">Yanıtı hemen dökmek yerine önce soruyu anlamlandırıp panoya taşınabilecek en tutarlı cevabı hazırlıyorum.</div>
+              <div className="thinking-dots" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -1000,7 +1071,7 @@ function ConversationScreen({ messages, onAsk, onSaveToBoard, onOpenBoards, boar
                   onSaveToBoard={onSaveToBoard}
                   onOpenBoards={onOpenBoards} />
               ) : (
-                <ThinkingMessage />
+                <ThinkingMessage content={message.streamText} />
               )}
             </React.Fragment>
           )}
@@ -1394,22 +1465,44 @@ function App() {
     }
   }, [boardItems, drawer]);
 
-  const ask = (text) => {
+  const ask = async (text) => {
     const id = createId("msg");
-    setMessages((current) => [...current, { id, text, status: "thinking", result: null, savedToBoard: false }]);
+    setMessages((current) => [...current, { id, text, status: "thinking", result: null, savedToBoard: false, streamText: "" }]);
     setView("convo");
     setSidebarOpen(true);
 
-    const timeoutId = window.setTimeout(() => {
+    try {
+      let streamed = "";
+      const finalPayload = await streamAgentAnswer(text, (token) => {
+        streamed += token;
+        setMessages((current) =>
+          current.map((message) => message.id === id ? { ...message, streamText: streamed } : message)
+        );
+      });
+      const answer = String(finalPayload?.response || streamed || "");
       setMessages((current) =>
         current.map((message) =>
-          message.id === id ? { ...message, status: "done", result: generateMockResult(text, 0) } : message
+          message.id === id ? { ...message, status: "done", result: buildAgentResult(text, answer, 0), streamText: "" } : message
         )
       );
-      timeoutsRef.current.delete(id);
-    }, getThinkingDuration(text));
-
-    timeoutsRef.current.set(id, timeoutId);
+    } catch (error) {
+      const fallback = generateMockResult(text, 0);
+      const message = error instanceof Error ? error.message : "Agent stream unavailable";
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === id ? {
+            ...item,
+            status: "done",
+            streamText: "",
+            result: {
+              ...fallback,
+              intro: `Canlı agent bağlantısı kurulamadı: ${message}. Yerel demo cevabı gösteriyorum.`,
+              insight: fallback.insight
+            }
+          } : item
+        )
+      );
+    }
   };
 
   const newThread = () => {

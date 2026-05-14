@@ -113,8 +113,8 @@ export function createSeedState(): PlatformState {
         ],
         industryDomainPack: "banking",
         modelPolicy: {
-          provider: "mock",
-          allowedModels: ["mock-enterprise-analyst"],
+          provider: process.env.LLM_PROVIDER ?? "mock",
+          allowedModels: [process.env.LLM_MODEL ?? "mock-enterprise-analyst"],
           piiMode: "mask_required"
         },
         dataResidencyPolicy: {
@@ -307,6 +307,21 @@ export function createSeedState(): PlatformState {
             createdAt: now
           }
         ]
+      },
+      {
+        id: "prompt_agent_chat",
+        tenantId: DEFAULT_TENANT_ID,
+        key: "agent_chat",
+        name: "Realtime agent chat",
+        description: "Streams tenant-scoped governed agent answers for the chat workspace.",
+        versions: [
+          {
+            id: "prompt_agent_chat_v1",
+            version: 1,
+            body: "Agent: {{agent}}\nUser question: {{user_message}}\n\nAnswer in the user's language. Be concise, practical, and explicit about any platform action or approval that would be required. If you need data execution, explain the safe next step rather than inventing results.",
+            createdAt: now
+          }
+        ]
       }
     ],
     promptExecutionTraces: [],
@@ -347,6 +362,7 @@ export function createSeedState(): PlatformState {
     ],
     toolPermissions: [
       { id: "tp_admin_query", tenantId: DEFAULT_TENANT_ID, roleName: "Admin", toolKey: "query.run", allowed: true, requiresApproval: false },
+      { id: "tp_admin_rag", tenantId: DEFAULT_TENANT_ID, roleName: "Admin", toolKey: "rag.retrieve", allowed: true, requiresApproval: false },
       { id: "tp_admin_jira", tenantId: DEFAULT_TENANT_ID, roleName: "Admin", toolKey: "jira.create_ticket", allowed: true, requiresApproval: true },
       { id: "tp_analyst_query", tenantId: DEFAULT_TENANT_ID, roleName: "Analyst", toolKey: "query.run", allowed: true, requiresApproval: false },
       { id: "tp_analyst_rag", tenantId: DEFAULT_TENANT_ID, roleName: "Analyst", toolKey: "rag.retrieve", allowed: true, requiresApproval: false },

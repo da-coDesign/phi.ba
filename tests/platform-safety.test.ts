@@ -94,6 +94,21 @@ describe("enterprise safety controls", () => {
     })).rejects.toThrow(ApiError);
   });
 
+  it("streams agent answers only after safety checks pass", async () => {
+    const chunks = [];
+    for await (const chunk of agentService.streamExecute(context(), {
+      agentId: "agent_risk",
+      message: "Explain the latest risk movement",
+      toolKey: "rag.retrieve"
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.some((chunk) => chunk.event === "token")).toBe(true);
+    expect(chunks.at(-1)?.event).toBe("done");
+    expect(store.snapshot().agentExecutionTraces[0]?.status).toBe("completed");
+  });
+
   it("requires human approval for high-risk workflow actions", async () => {
     const result = await workflowService.executeAction(context(), {
       type: "jira_ticket",

@@ -32,6 +32,11 @@ function query<T = any>(request: FastifyRequest): T {
   return (request.query ?? {}) as T;
 }
 
+function writeSse(reply: any, event: string, data: unknown): void {
+  reply.raw.write(`event: ${event}\n`);
+  reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/health", async (_request, reply) => ok(reply, { status: "ok", service: "phi-ba-api" }));
   app.get("/live", async (_request, reply) => ok(reply, { status: "live" }));
@@ -197,6 +202,25 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   });
   app.post("/api/v1/agents/:id/execute", async (request: AnyRequest, reply) => {
     return ok(reply, await agentService.execute(request.platformContext, { ...body(request), agentId: params(request).id }));
+  });
+  app.post("/api/v1/agents/:id/stream", async (request: AnyRequest, reply) => {
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-correlation-id": request.platformContext.correlationId
+    });
+    try {
+      for await (const chunk of agentService.streamExecute(request.platformContext, { ...body(request), agentId: params(request).id })) {
+        writeSse(reply, chunk.event, chunk.data);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Streaming failed";
+      writeSse(reply, "error", { message, correlationId: request.platformContext.correlationId });
+    } finally {
+      reply.raw.end();
+    }
   });
   app.get("/api/v1/agent-traces", async (request, reply) => {
     requirePermission(request.platformContext, permissions.observabilityRead);

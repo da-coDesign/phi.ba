@@ -101,6 +101,86 @@ export class AgentService {
     return { status: "completed", response: modelOutput.text, traceId: trace.id };
   }
 
+  async *streamExecute(context: RequestContext, input: { agentId: string; message: string; toolKey?: string; approvalId?: string }): AsyncIterable<{ event: "meta" | "token" | "done"; data: JsonRecord }> {
+    const agent = this.repository.snapshot().agents.find((item) => item.tenantId === context.tenantId && item.id === input.agentId);
+    if (!agent || !agent.enabled) throw blocked(`Agent ${input.agentId} is not available`);
+    const toolKey = input.toolKey ?? "rag.retrieve";
+    const tool = this.tools.get(toolKey);
+    const operationId = createId("agent_run");
+    const model = process.env.LLM_MODEL ?? "mock-enterprise-analyst";
+    const safetyRuns = safetyGateService.runForOperation(context, {
+      tenantId: context.tenantId,
+      operationType: "agent",
+      operationId,
+      requiredPermission: permissions.agentsExecute,
+      model,
+      toolKey,
+      riskLevel: tool.riskLevel,
+      approvalId: input.approvalId,
+      payload: { message: input.message }
+    });
+    const blockers = safetyRuns.filter((run) => run.status === "BLOCKED");
+    if (blockers.length > 0) {
+      const approvalBlock = blockers.find((run) => run.checkKey === "human_approval_policy");
+      if (approvalBlock && blockers.length === 1) {
+        const approval = this.createApprovalRequest(context, {
+          actionType: `agent_tool.${toolKey}`,
+          subjectId: operationId,
+          reason: approvalBlock.message
+        });
+        const trace = this.appendTrace(context, {
+          agentId: agent.id,
+          input: { message: input.message, toolKey },
+          output: { approvalRequestId: approval.id },
+          toolCalls: [{ toolKey, status: "pending_approval" }],
+          safetyStatus: "BLOCKED",
+          status: "pending_approval"
+        });
+        yield { event: "done", data: { status: "pending_approval", approvalRequestId: approval.id, traceId: trace.id } };
+        return;
+      }
+      throw blocked(blockers.map((run) => `${run.checkKey}: ${run.message}`).join("; "));
+    }
+
+    yield { event: "meta", data: { agentId: agent.id, agentName: agent.name, operationId, toolKey, safetyStatus: "PASS" } };
+    let response = "";
+    let promptTraceId = "";
+    for await (const chunk of llmGatewayService.streamPrompt(context, {
+      promptKey: "agent_chat",
+      model,
+      variables: { user_message: input.message, agent: agent.name },
+      piiMasked: true
+    })) {
+      if (chunk.event === "token") {
+        response += String(chunk.data.token ?? "");
+        yield chunk;
+      }
+      if (chunk.event === "done") {
+        promptTraceId = String(chunk.data.traceId ?? "");
+      }
+    }
+
+    const trace = this.appendTrace(context, {
+      agentId: agent.id,
+      input: { message: input.message, toolKey },
+      output: { response, promptTraceId, memory: "placeholder", evaluation: "placeholder" },
+      toolCalls: [{ toolKey, status: "completed" }],
+      safetyStatus: "PASS",
+      status: "completed"
+    });
+    this.repository.appendAudit({
+      tenantId: context.tenantId,
+      actorUserId: context.userId,
+      eventType: "AGENT_RUN",
+      action: "agent.stream",
+      resourceType: "agent",
+      resourceId: agent.id,
+      correlationId: context.correlationId,
+      metadata: { toolKey, traceId: trace.id, promptTraceId }
+    });
+    yield { event: "done", data: { status: "completed", response, traceId: trace.id, promptTraceId } };
+  }
+
   listTraces(context: RequestContext): AgentExecutionTrace[] {
     return this.repository.snapshot().agentExecutionTraces.filter((trace) => trace.tenantId === context.tenantId);
   }
