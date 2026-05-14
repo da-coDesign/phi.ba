@@ -1,3 +1,4 @@
+import { getPostgresCredentialStatus } from "@phi-ba/api/connectors";
 import { getOpenAiCredentialStatus, providerRequiresOpenAiKey } from "@phi-ba/api/llm";
 
 export const runtime = "nodejs";
@@ -15,7 +16,8 @@ export async function GET() {
       textToSqlModel: process.env.TEXT_TO_SQL_MODEL ?? process.env.LLM_MODEL ?? "gpt-5.4-mini",
       openAiBaseUrl: process.env.OPENAI_BASE_URL ? "configured" : "default",
       providerRequiresOpenAiKey: providerRequiresOpenAiKey(provider),
-      ...credentialStatus
+      ...credentialStatus,
+      ...getPostgresCredentialStatus()
     }
   }, {
     headers: {

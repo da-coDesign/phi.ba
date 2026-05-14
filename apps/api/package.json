@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./agents": "./src/agents.ts",
+    "./connectors": "./src/connectors.ts",
     "./llm": "./src/llm.ts",
     "./store": "./src/store.ts"
   },

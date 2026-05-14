@@ -8,6 +8,7 @@ import type { Connector, JsonRecord } from "./platform-types.js";
 
 const { Pool } = pg;
 const pools = new Map<string, pg.Pool>();
+const DEFAULT_DATABASE_URL_ENV_NAMES = ["DATABASE_URL", "POSTGRES_URL", "POSTGRES_PRISMA_URL", "POSTGRES_URL_NON_POOLING"] as const;
 
 export interface ConnectorAdapter {
   type: Connector["type"];
@@ -29,15 +30,17 @@ class PostgreSqlConnectorAdapter implements ConnectorAdapter {
   }
 
   health(connector: Connector): { status: Connector["status"]; message: string } {
-    const databaseUrlEnv = typeof connector.config.databaseUrlEnv === "string" ? connector.config.databaseUrlEnv : "DATABASE_URL";
-    const hasDatabaseUrl = Boolean(process.env[databaseUrlEnv]);
+    const credentialStatus = getPostgresCredentialStatus(connector);
+    const databaseUrlEnv = credentialStatus.databaseUrlEnv ?? "DATABASE_URL";
+    const hasDatabaseUrl = Boolean(credentialStatus.hasDatabaseUrl);
     const mode = hasDatabaseUrl ? "postgres" : "unavailable";
     return { status: connector.status, message: `PostgreSQL connector ${connector.name} is ${connector.status}; execution mode is ${mode}.` };
   }
 
   test(connector: Connector): { ok: boolean; message: string } {
-    const databaseUrlEnv = typeof connector.config.databaseUrlEnv === "string" ? connector.config.databaseUrlEnv : "DATABASE_URL";
-    const hasDatabaseUrl = Boolean(process.env[databaseUrlEnv]);
+    const credentialStatus = getPostgresCredentialStatus(connector);
+    const databaseUrlEnv = credentialStatus.databaseUrlEnv ?? "DATABASE_URL";
+    const hasDatabaseUrl = Boolean(credentialStatus.hasDatabaseUrl);
     return {
       ok: connector.status !== "unknown" && hasDatabaseUrl,
       message: hasDatabaseUrl
@@ -54,7 +57,7 @@ class PostgreSqlConnectorAdapter implements ConnectorAdapter {
     const startedAt = Date.now();
     const timeoutMs = Math.min(Number(payload.timeoutMs ?? connector.config.timeoutMs ?? 8000), 15000);
     const databaseUrl = resolveDatabaseUrl(connector);
-    if (!databaseUrl) throw blocked("DATABASE_URL is required for PostgreSQL connector execution. Run migrations and seed FBDWHPRD before querying.");
+    if (!databaseUrl) throw blocked(getMissingDatabaseUrlMessage(connector));
     try {
       const result = await runPostgresQuery(databaseUrl, sql, timeoutMs);
       return {
@@ -288,10 +291,38 @@ export class ConnectorService {
 
 export const connectorService = new ConnectorService(store);
 
+export function getPostgresCredentialStatus(connector?: Connector): JsonRecord {
+  const envNames = getDatabaseUrlEnvNames(connector);
+  const source = envNames.find((envName) => Boolean(process.env[envName]?.trim()));
+  return {
+    hasDatabaseUrl: Boolean(source),
+    databaseUrlEnv: source ?? envNames[0] ?? "DATABASE_URL",
+    checkedDatabaseEnvVars: envNames,
+    databaseUrlSource: source ?? null
+  };
+}
+
 function resolveDatabaseUrl(connector: Connector): string | undefined {
-  const databaseUrlEnv = typeof connector.config.databaseUrlEnv === "string" ? connector.config.databaseUrlEnv : "DATABASE_URL";
-  const value = process.env[databaseUrlEnv];
-  return value?.trim() ? value : undefined;
+  for (const envName of getDatabaseUrlEnvNames(connector)) {
+    const value = process.env[envName]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function getDatabaseUrlEnvNames(connector?: Connector): string[] {
+  const configured = typeof connector?.config.databaseUrlEnv === "string" ? connector.config.databaseUrlEnv : "DATABASE_URL";
+  return Array.from(new Set([configured, ...DEFAULT_DATABASE_URL_ENV_NAMES]));
+}
+
+function getMissingDatabaseUrlMessage(connector: Connector): string {
+  const envNames = getDatabaseUrlEnvNames(connector);
+  return [
+    `${envNames[0] ?? "DATABASE_URL"} is not visible to the server runtime.`,
+    "Set a server-side PostgreSQL connection string for the active Vercel environment, then redeploy.",
+    `Accepted env names: ${envNames.join(", ")}.`,
+    "Run migrations and seed FBDWHPRD before querying."
+  ].join(" ");
 }
 
 async function runPostgresQuery(databaseUrl: string, sql: string, timeoutMs: number): Promise<pg.QueryResult<JsonRecord>> {

@@ -34,6 +34,7 @@ OPENAI_API_KEY=<server-side-openai-api-key>
 Do not commit `.env` or paste production keys into chat. If `OPENAI_API_KEY` is missing, the agent returns a connection error instead of fabricated analysis.
 
 FBDWHPRD queries require PostgreSQL. Run migrations and `npm run db:seed:banking-demo` before using the agent against the banking dataset; the API returns a controlled connector error instead of fabricating rows when `DATABASE_URL` is missing.
+On Vercel, set the database connection string as a server-side Production env var. The connector accepts `DATABASE_URL`, `POSTGRES_URL`, `POSTGRES_PRISMA_URL`, or `POSTGRES_URL_NON_POOLING`; after changing env vars, redeploy and verify `/api/v1/runtime/status` shows `hasDatabaseUrl: true`.
 
 For Vercel, do not leave `NEXT_PUBLIC_API_BASE_URL` pointed at `http://localhost:4000`. The deployed web app must point to a reachable API deployment URL, while local development can keep `http://localhost:4000`.
 

@@ -2,14 +2,14 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { permissions, type RequestContext } from "@phi-ba/contracts";
 import { agentService, classifyAgentIntent } from "../apps/api/src/agents.js";
 import { chatKitService } from "../apps/api/src/chatkit.js";
-import { connectorService } from "../apps/api/src/connectors.js";
+import { connectorService, getPostgresCredentialStatus } from "../apps/api/src/connectors.js";
 import { ApiError } from "../apps/api/src/errors.js";
 import { llmGatewayService } from "../apps/api/src/llm.js";
 import { marketIntelligenceService } from "../apps/api/src/market-intelligence.js";
 import { safetyGateService } from "../apps/api/src/safety-gates.js";
 import { sentryService } from "../apps/api/src/sentry.js";
 import { simulationService } from "../apps/api/src/simulation.js";
-import { isReadOnlySql } from "../apps/api/src/sql-safety.js";
+import { extractSqlColumns, isReadOnlySql, validateSqlAgainstConnector } from "../apps/api/src/sql-safety.js";
 import { store } from "../apps/api/src/store.js";
 import { textToSqlService } from "../apps/api/src/text-to-sql.js";
 import { workflowService } from "../apps/api/src/workflows.js";
@@ -169,6 +169,17 @@ describe("enterprise safety controls", () => {
     expect(isReadOnlySql("SELECT * FROM risk_izleme; DROP TABLE users")).toBe(false);
   });
 
+  it("allows aggregate SQL expressions over allowlisted columns", () => {
+    const connector = store.getConnector("tenant_fibabanka", "connector_pg_reporting");
+    const sql = "SELECT city, COUNT(*) AS customer_count, ROUND(AVG(avg_total_balance_try), 2) AS avg_balance_try FROM v_customer_360 WHERE city = 'Antalya' GROUP BY city";
+    const result = validateSqlAgainstConnector(sql, connector);
+
+    expect(result.ok).toBe(true);
+    expect(result.columns).toEqual(expect.arrayContaining(["city", "avg_total_balance_try"]));
+    expect(result.columns).not.toContain("ROUNDAVGavg_total_balance_try");
+    expect(extractSqlColumns("SELECT age_band, income_band, COUNT(*) AS customer_count, ROUND(AVG(risk_score), 2) AS avg_risk_score FROM bank_customers WHERE city = 'Antalya' GROUP BY age_band, income_band")).toEqual(expect.arrayContaining(["age_band", "income_band", "risk_score"]));
+  });
+
   it("blocks unsafe SQL before connector execution", () => {
     expect(() => safetyGateService.assertAllowed(context(), {
       tenantId: "tenant_fibabanka",
@@ -324,6 +335,33 @@ describe("enterprise safety controls", () => {
         delete process.env.DATABASE_URL;
       } else {
         process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+    }
+  });
+
+  it("recognizes common production Postgres environment variable names", () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousPostgresUrl = process.env.POSTGRES_URL;
+    delete process.env.DATABASE_URL;
+    process.env.POSTGRES_URL = "postgresql://readonly:test@example.invalid:5432/phi_ba";
+
+    try {
+      const connector = store.getConnector("tenant_fibabanka", "connector_pg_reporting");
+      expect(getPostgresCredentialStatus(connector)).toMatchObject({
+        hasDatabaseUrl: true,
+        databaseUrlSource: "POSTGRES_URL"
+      });
+      expect(connectorService.test(context(), "connector_pg_reporting")).toMatchObject({ ok: true });
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      if (previousPostgresUrl === undefined) {
+        delete process.env.POSTGRES_URL;
+      } else {
+        process.env.POSTGRES_URL = previousPostgresUrl;
       }
     }
   });

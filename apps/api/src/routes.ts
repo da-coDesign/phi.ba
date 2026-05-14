@@ -3,7 +3,7 @@ import { permissions } from "@phi-ba/contracts";
 import { createId } from "@phi-ba/shared";
 import { agentService } from "./agents.js";
 import { chatKitService } from "./chatkit.js";
-import { connectorService } from "./connectors.js";
+import { connectorService, getPostgresCredentialStatus } from "./connectors.js";
 import { created, ok } from "./http.js";
 import { identityService } from "./identity.js";
 import { getOpenAiCredentialStatus, llmGatewayService, providerRequiresOpenAiKey } from "./llm.js";
@@ -54,7 +54,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       textToSqlModel: process.env.TEXT_TO_SQL_MODEL ?? process.env.LLM_MODEL ?? "gpt-5.4-mini",
       openAiBaseUrl: process.env.OPENAI_BASE_URL ? "configured" : "default",
       providerRequiresOpenAiKey: providerRequiresOpenAiKey(provider),
-      ...getOpenAiCredentialStatus(request.platformContext.openAiApiKey)
+      ...getOpenAiCredentialStatus(request.platformContext.openAiApiKey),
+      ...getPostgresCredentialStatus(store.getConnector(request.platformContext.tenantId, "connector_pg_reporting"))
     });
   });
 
