@@ -55,6 +55,9 @@ function buildTestProviderText(variables: Record<string, unknown>): string {
 
 function testSqlForQuestion(question: string): string {
   const normalized = question.toLocaleLowerCase("tr-TR");
+  if (/previous analytics context/.test(normalized) && /v_card_approval_daily/.test(normalized) && /(geniş|genis|broader|evet|öyle|oyle)/.test(normalized)) {
+    return "SELECT report_date, channel, segment, decline_reason, txn_count, txn_volume_try, approval_rate_pct, rejected_txn_count, lost_volume_try FROM v_card_approval_daily WHERE report_date BETWEEN DATE '2024-04-11' AND DATE '2024-04-25' ORDER BY rejected_txn_count DESC LIMIT 10";
+  }
   if (/(?:kaç|kac|sayı|sayısı|sayisi|adet|count).*(?:müşteri|musteri|customer)|(?:müşteri|musteri|customer).*(?:kaç|kac|sayı|sayısı|sayisi|adet|count)/.test(normalized)) {
     return "SELECT metric_name, row_count, description FROM v_dataset_summary WHERE metric_name = 'customers' LIMIT 1";
   }
@@ -265,6 +268,44 @@ describe("enterprise safety controls", () => {
     expect(final.result.mode).toBe("text");
     expect(final.result.toolCalls).toHaveLength(0);
     expect(final.response).toContain("segment bazlı işlem hacmini");
+  });
+
+  it("uses the prior zero-row card context for broader-filter follow-ups", async () => {
+    const conversationContext = [{
+      question: "18 Nisan'da kart onay oranı neden düştü?",
+      answer: "18 Nisan için çalıştırılan güvenli read-only sorgu sonuç döndürmedi. İstersen aynı tarihi daha geniş filtrelerle yeniden inceleyelim.",
+      mode: "data_card",
+      sql: "SELECT report_date, channel, segment, decline_reason, txn_count, txn_volume_try, approval_rate_pct, rejected_txn_count, lost_volume_try FROM v_card_approval_daily WHERE report_date = DATE '2024-04-18' ORDER BY rejected_txn_count DESC LIMIT 10",
+      columns: [
+        { key: "report_date", label: "report date", type: "text" },
+        { key: "approval_rate_pct", label: "approval rate pct", type: "percent" },
+        { key: "rejected_txn_count", label: "rejected txn count", type: "count" }
+      ],
+      rows: []
+    }];
+
+    for (const message of ["aynı tarihi daha geniş filtrelerle incele", "evet öyle yap"]) {
+      let sql = "";
+      let final: any;
+      let caught: unknown;
+      try {
+        for await (const chunk of agentService.streamExecute(context(), {
+          agentId: "agent_risk",
+          message,
+          conversationContext
+        })) {
+          if (chunk.event === "sql_done") sql = String(chunk.data.sql ?? "");
+          if (chunk.event === "done") final = chunk.data;
+        }
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(sql).toContain("v_card_approval_daily");
+      expect(sql).toContain("BETWEEN DATE '2024-04-11' AND DATE '2024-04-25'");
+      expect(sql).not.toContain("report_date = DATE '2024-04-18'");
+      if (!caught) expect(final?.status).toBe("completed");
+    }
   });
 
   it("returns card-ready data for metric questions through the central agent", async () => {

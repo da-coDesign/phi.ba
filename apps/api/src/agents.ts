@@ -438,7 +438,9 @@ function normalizeConversationTurn(value: unknown): AgentConversationTurn | unde
 }
 
 function refineDecisionWithConversation(message: string, decision: AgentDecision, conversationContext: AgentConversationTurn[], explicitToolKey?: string): AgentDecision {
-  if (explicitToolKey || !latestDataTurn(conversationContext)) return decision;
+  const latest = latestDataTurn(conversationContext);
+  if (explicitToolKey || !latest) return decision;
+  if (isContextualConfirmation(message) && !hasActionableDataSuggestion(latest.answer)) return decision;
   if (asksForContextualDataTransformation(message)) {
     return {
       intent: "data_query",
@@ -465,11 +467,13 @@ function buildContextualDataQuestion(message: string, conversationContext: Agent
   const parts = [
     "Previous analytics context:",
     latest.question ? `Previous user question: ${latest.question}` : "",
+    latest.answer ? `Previous assistant answer: ${latest.answer}` : "",
     latest.sql ? `Previous SQL: ${latest.sql}` : "",
     latest.columns?.length ? `Previous columns: ${latest.columns.map((column) => column.key || column.label).join(", ")}` : "",
     latest.rows?.length ? `Previous sample rows: ${JSON.stringify(latest.rows.slice(0, 5))}` : "",
     `Follow-up request: ${message}`,
-    "Generate a new safe PostgreSQL SELECT for the follow-up. Preserve the previous metric and domain unless the follow-up explicitly changes them."
+    "Generate a new safe PostgreSQL SELECT for the follow-up. Preserve the previous metric and domain unless the follow-up explicitly changes them.",
+    "If the prior answer said rows were empty and the follow-up asks for broader filters or confirms that suggestion, broaden the previous query instead of asking for the date again. Prefer removing narrow filters and, when an exact date was used, inspect a small date window around that date."
   ];
   return parts.filter(Boolean).join("\n");
 }
@@ -490,16 +494,27 @@ function latestDataTurn(conversationContext: AgentConversationTurn[]): AgentConv
 
 function asksForContextualDataTransformation(message: string): boolean {
   const normalized = message.toLocaleLowerCase("tr-TR");
-  return hasDataTransformationTerm(normalized) && shouldUsePriorDataContext(normalized);
+  return isContextualConfirmation(normalized) || (hasDataTransformationTerm(normalized) && shouldUsePriorDataContext(normalized));
+}
+
+function hasActionableDataSuggestion(answer: string): boolean {
+  const normalized = answer.toLocaleLowerCase("tr-TR");
+  return /(istersen|devam|yeniden|tekrar|geniş|genis|genişlet|genislet|filtre|incele|sorgu|analiz|bakalım|bakalim)/.test(normalized);
 }
 
 function shouldUsePriorDataContext(message: string): boolean {
   const normalized = message.toLocaleLowerCase("tr-TR").trim();
-  return isContextualReference(normalized) || (hasDataTransformationTerm(normalized) && normalized.split(/\s+/).length <= 6);
+  return isContextualReference(normalized) || isContextualConfirmation(normalized) || (hasDataTransformationTerm(normalized) && normalized.split(/\s+/).length <= 8);
 }
 
 function hasDataTransformationTerm(normalized: string): boolean {
-  return /(haftalık|haftalik|günlük|gunluk|aylık|aylik|çeyrek|ceyrek|kırılım|kirilim|ayır|ayir|böl|bol|breakdown|trend|zaman|kanal|segment|ürün|urun|liste|sırala|sirala|top|filtrele|sadece|grafik|tablo|karşılaştır|karsilastir)/.test(normalized);
+  return /(haftalık|haftalik|günlük|gunluk|aylık|aylik|çeyrek|ceyrek|kırılım|kirilim|ayır|ayir|böl|bol|breakdown|trend|zaman|kanal|segment|ürün|urun|liste|sırala|sirala|top|filtre|geniş|genis|genişlet|genislet|incele|bak|araştır|arastir|sadece|grafik|tablo|karşılaştır|karsilastir)/.test(normalized);
+}
+
+function isContextualConfirmation(message: string): boolean {
+  const normalized = message.toLocaleLowerCase("tr-TR").trim();
+  return /^(evet|tamam|olur|ok|aynen|peki)(\s+(öyle|oyle|böyle|boyle|onu|bunu|devam))?(\s+(yap|yapalım|yapalim|incele|bak))?\.?$/.test(normalized) ||
+    /^(öyle|oyle|böyle|boyle)\s+yap\.?$/.test(normalized);
 }
 
 function isContextualExplanationFollowUp(message: string): boolean {
@@ -510,7 +525,7 @@ function isContextualExplanationFollowUp(message: string): boolean {
 
 function isContextualReference(message: string): boolean {
   const normalized = message.toLocaleLowerCase("tr-TR");
-  return /(^|\s)(bu|bunu|şu|su|şunu|sunu|onu|buradaki|yukarıdaki|yukaridaki|önceki|onceki|data|datayı|datayi|veri|veriyi|sonuç|sonuc|sonucu|tablo|tabloyu|grafik|grafiği|grafigi|çıktı|cikti|çıktıyı|ciktiyi|bunlar)(\s|$)/.test(normalized);
+  return /(^|\s)(bu|bunu|şu|su|şunu|sunu|onu|aynı|ayni|buradaki|yukarıdaki|yukaridaki|önceki|onceki|data|datayı|datayi|veri|veriyi|sonuç|sonuc|sonucu|tablo|tabloyu|grafik|grafiği|grafigi|çıktı|cikti|çıktıyı|ciktiyi|bunlar)(\s|$)/.test(normalized);
 }
 
 function normalizeConversationColumns(value: unknown): AgentConversationTurn["columns"] {
