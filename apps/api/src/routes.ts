@@ -6,7 +6,7 @@ import { chatKitService } from "./chatkit.js";
 import { connectorService } from "./connectors.js";
 import { created, ok } from "./http.js";
 import { identityService } from "./identity.js";
-import { llmGatewayService } from "./llm.js";
+import { getOpenAiCredentialStatus, llmGatewayService, providerRequiresOpenAiKey } from "./llm.js";
 import { marketIntelligenceService } from "./market-intelligence.js";
 import { ragService } from "./rag.js";
 import { requirePermission } from "./request-context.js";
@@ -43,6 +43,20 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/live", async (_request, reply) => ok(reply, { status: "live" }));
   app.get("/ready", async (_request, reply) => ok(reply, { status: "ready", dependencies: { database: "configured", redis: "configured" } }));
   app.get("/metrics", async (_request, reply) => reply.type("text/plain").send("# phi_ba_metrics_placeholder 1\n"));
+  app.get("/api/v1/runtime/status", async (request, reply) => {
+    const config = store.getTenantConfig(request.platformContext.tenantId);
+    const provider = String(process.env.LLM_PROVIDER ?? config.modelPolicy.provider ?? "openai");
+    return ok(reply, {
+      runtime: "fastify-api",
+      deploymentEnvironment: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "local",
+      provider,
+      model: process.env.LLM_MODEL ?? "gpt-5.4-mini",
+      textToSqlModel: process.env.TEXT_TO_SQL_MODEL ?? process.env.LLM_MODEL ?? "gpt-5.4-mini",
+      openAiBaseUrl: process.env.OPENAI_BASE_URL ? "configured" : "default",
+      providerRequiresOpenAiKey: providerRequiresOpenAiKey(provider),
+      ...getOpenAiCredentialStatus(request.platformContext.openAiApiKey)
+    });
+  });
 
   app.get("/api/v1/tenants", async (request, reply) => {
     requirePermission(request.platformContext, permissions.tenantsRead);

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./agents": "./src/agents.ts",
+    "./llm": "./src/llm.ts",
     "./store": "./src/store.ts"
   },
   "scripts": {

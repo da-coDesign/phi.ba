@@ -295,6 +295,16 @@ async function streamAgentAnswer(question, source, onEvent) {
   return finalPayload;
 }
 
+async function fetchRuntimeStatus() {
+  const response = await fetch(`${API_BASE}/api/v1/runtime/status`, {
+    method: "GET",
+    headers: buildApiHeaders()
+  });
+  if (!response.ok) return null;
+  const payload = await response.json();
+  return payload.data || null;
+}
+
 function parseSseFrame(frame) {
   const lines = frame.split("\n");
   const eventLine = lines.find((line) => line.startsWith("event:"));
@@ -1323,6 +1333,8 @@ function App() {
   const [drawer, setDrawer] = useState(null);
   const [selectedSource, setSelectedSource] = useState(() => window.localStorage.getItem(STORAGE_KEYS.source) || DEFAULT_DATA_SOURCE);
   const [hasOpenAiKey, setHasOpenAiKey] = useState(() => Boolean(window.localStorage.getItem(OPENAI_KEY_STORAGE)));
+  const [runtimeStatus, setRuntimeStatus] = useState(null);
+  const hasConfiguredOpenAiKey = hasOpenAiKey || Boolean(runtimeStatus?.hasServerOpenAiKey || runtimeStatus?.hasRequestOpenAiKey);
 
   useEffect(() => {
     document.documentElement.style.setProperty("--brand", tweaks.primaryColor);
@@ -1337,6 +1349,20 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEYS.source, selectedSource);
   }, [selectedSource]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchRuntimeStatus()
+      .then((status) => {
+        if (!cancelled) setRuntimeStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) setRuntimeStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasOpenAiKey]);
 
   useEffect(() => {
     if (!boardNotice) return undefined;
@@ -1579,7 +1605,7 @@ function App() {
             selectedSource={selectedSource}
             onSelectSource={setSelectedSource}
             onConfigureKey={configureOpenAiKey}
-            hasOpenAiKey={hasOpenAiKey} />}
+            hasOpenAiKey={hasConfiguredOpenAiKey} />}
         {view === "convo" &&
           <ConversationScreen
             messages={messages}
@@ -1590,7 +1616,7 @@ function App() {
             selectedSource={selectedSource}
             onSelectSource={setSelectedSource}
             onConfigureKey={configureOpenAiKey}
-            hasOpenAiKey={hasOpenAiKey}
+            hasOpenAiKey={hasConfiguredOpenAiKey}
             showSqlDefault={tweaks.showSqlByDefault} />
         }
         {view === "boards" &&

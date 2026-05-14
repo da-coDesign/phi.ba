@@ -18,6 +18,8 @@ interface ModelProviderInput {
   apiKey?: string;
 }
 
+const OPENAI_SERVER_KEY_ENV_NAMES = ["OPENAI_API_KEY", "OPENAI_KEY", "OPENAI_SECRET_KEY"] as const;
+
 class DataGroundedLocalProvider implements ModelProvider {
   key = "data-grounded-local";
 
@@ -400,10 +402,51 @@ function renderPrompt(template: string, variables: JsonRecord): string {
 
 export const llmGatewayService = new LlmGatewayService(store);
 
+export function providerRequiresOpenAiKey(providerKey: string | undefined): boolean {
+  return providerKey === "openai" || providerKey === "openai-compatible";
+}
+
+export function getOpenAiCredentialStatus(override?: string): JsonRecord {
+  const resolved = resolveOpenAiApiKey(override);
+  return {
+    hasServerOpenAiKey: Boolean(resolved && resolved.source !== "request-header"),
+    hasRequestOpenAiKey: Boolean(resolved && resolved.source === "request-header"),
+    openAiKeySource: resolved?.source ?? null,
+    checkedServerEnvVars: [...OPENAI_SERVER_KEY_ENV_NAMES]
+  };
+}
+
 function getOpenAiApiKey(override?: string): string {
-  const apiKey = process.env.OPENAI_API_KEY || override;
-  if (!apiKey) throw blocked("OPENAI_API_KEY is required for real OpenAI model calls.");
-  return apiKey;
+  const resolved = resolveOpenAiApiKey(override);
+  if (!resolved) throw blocked(getOpenAiMissingKeyMessage());
+  return resolved.apiKey;
+}
+
+function resolveOpenAiApiKey(override?: string): { apiKey: string; source: string } | undefined {
+  for (const envName of OPENAI_SERVER_KEY_ENV_NAMES) {
+    const apiKey = normalizeSecret(process.env[envName]);
+    if (apiKey) return { apiKey, source: envName };
+  }
+  const requestKey = normalizeSecret(override);
+  return requestKey ? { apiKey: requestKey, source: "request-header" } : undefined;
+}
+
+function normalizeSecret(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1).trim() || undefined;
+  }
+  return trimmed;
+}
+
+function getOpenAiMissingKeyMessage(): string {
+  return [
+    "OPENAI_API_KEY is not visible to the server runtime.",
+    "Set OPENAI_API_KEY as a server-side environment variable for the active Vercel environment, then redeploy.",
+    "Accepted server env names: OPENAI_API_KEY, OPENAI_KEY, OPENAI_SECRET_KEY.",
+    "Verify /api/v1/runtime/status shows hasServerOpenAiKey=true before testing the agent."
+  ].join(" ");
 }
 
 function getOpenAiBaseUrl(): string {
