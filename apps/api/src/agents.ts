@@ -473,7 +473,8 @@ function buildContextualDataQuestion(message: string, conversationContext: Agent
     latest.rows?.length ? `Previous sample rows: ${JSON.stringify(latest.rows.slice(0, 5))}` : "",
     `Follow-up request: ${message}`,
     "Generate a new safe PostgreSQL SELECT for the follow-up. Preserve the previous metric and domain unless the follow-up explicitly changes them.",
-    "If the prior answer said rows were empty and the follow-up asks for broader filters or confirms that suggestion, broaden the previous query instead of asking for the date again. Prefer removing narrow filters and, when an exact date was used, inspect a small date window around that date."
+    "If the prior answer said rows were empty and the follow-up asks for broader filters or confirms that suggestion, broaden the previous query instead of asking for the date again. Prefer removing narrow filters and, when an exact date was used, inspect a small date window around that date.",
+    "If the prior answer proposed a specific next analysis or date window, treat short confirmations like 'olur öner' as approval to run that suggested analysis."
   ];
   return parts.filter(Boolean).join("\n");
 }
@@ -499,7 +500,7 @@ function asksForContextualDataTransformation(message: string): boolean {
 
 function hasActionableDataSuggestion(answer: string): boolean {
   const normalized = answer.toLocaleLowerCase("tr-TR");
-  return /(istersen|devam|yeniden|tekrar|geniş|genis|genişlet|genislet|filtre|incele|sorgu|analiz|bakalım|bakalim)/.test(normalized);
+  return /(istersen|devam|yeniden|tekrar|geniş|genis|genişlet|genislet|filtre|incele|sorgu|analiz|öner|oner|karşılaştır|karsilastir|bakalım|bakalim)/.test(normalized);
 }
 
 function shouldUsePriorDataContext(message: string): boolean {
@@ -508,12 +509,12 @@ function shouldUsePriorDataContext(message: string): boolean {
 }
 
 function hasDataTransformationTerm(normalized: string): boolean {
-  return /(haftalık|haftalik|günlük|gunluk|aylık|aylik|çeyrek|ceyrek|kırılım|kirilim|ayır|ayir|böl|bol|breakdown|trend|zaman|kanal|segment|ürün|urun|liste|sırala|sirala|top|filtre|geniş|genis|genişlet|genislet|incele|bak|araştır|arastir|sadece|grafik|tablo|karşılaştır|karsilastir)/.test(normalized);
+  return /(haftalık|haftalik|günlük|gunluk|aylık|aylik|çeyrek|ceyrek|kırılım|kirilim|ayır|ayir|böl|bol|breakdown|trend|zaman|kanal|segment|ürün|urun|liste|sırala|sirala|top|filtre|geniş|genis|genişlet|genislet|incele|bak|araştır|arastir|öner|oner|öneri|oneri|sadece|grafik|tablo|karşılaştır|karsilastir)/.test(normalized);
 }
 
 function isContextualConfirmation(message: string): boolean {
   const normalized = message.toLocaleLowerCase("tr-TR").trim();
-  return /^(evet|tamam|olur|ok|aynen|peki)(\s+(öyle|oyle|böyle|boyle|onu|bunu|devam))?(\s+(yap|yapalım|yapalim|incele|bak))?\.?$/.test(normalized) ||
+  return /^(evet|tamam|olur|ok|aynen|peki)(\s+(öyle|oyle|böyle|boyle|onu|bunu|devam))?(\s+(yap|yapalım|yapalim|incele|bak|öner|oner))?\.?$/.test(normalized) ||
     /^(öyle|oyle|böyle|boyle)\s+yap\.?$/.test(normalized);
 }
 

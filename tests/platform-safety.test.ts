@@ -55,7 +55,7 @@ function buildTestProviderText(variables: Record<string, unknown>): string {
 
 function testSqlForQuestion(question: string): string {
   const normalized = question.toLocaleLowerCase("tr-TR");
-  if (/previous analytics context/.test(normalized) && /v_card_approval_daily/.test(normalized) && /(geniş|genis|broader|evet|öyle|oyle)/.test(normalized)) {
+  if (/previous analytics context/.test(normalized) && /v_card_approval_daily/.test(normalized) && /(geniş|genis|broader|evet|öyle|oyle|olur|öner|oner)/.test(normalized)) {
     return "SELECT report_date, channel, segment, decline_reason, txn_count, txn_volume_try, approval_rate_pct, rejected_txn_count, lost_volume_try FROM v_card_approval_daily WHERE report_date BETWEEN DATE '2024-04-11' AND DATE '2024-04-25' ORDER BY rejected_txn_count DESC LIMIT 10";
   }
   if (/(?:kaç|kac|sayı|sayısı|sayisi|adet|count).*(?:müşteri|musteri|customer)|(?:müşteri|musteri|customer).*(?:kaç|kac|sayı|sayısı|sayisi|adet|count)/.test(normalized)) {
@@ -284,7 +284,7 @@ describe("enterprise safety controls", () => {
       rows: []
     }];
 
-    for (const message of ["aynı tarihi daha geniş filtrelerle incele", "evet öyle yap"]) {
+    for (const message of ["aynı tarihi daha geniş filtrelerle incele", "evet öyle yap", "olur öner"]) {
       let sql = "";
       let final: any;
       let caught: unknown;
