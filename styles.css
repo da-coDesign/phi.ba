@@ -381,6 +381,8 @@ kbd {
   border: 1px solid var(--line-2);
 }
 .chip-add { padding: 4px 7px; color: var(--ink-3); }
+.chip-key { padding: 4px 7px; color: var(--ink-3); flex: 0 0 auto; }
+.chip-key.is-set { color: var(--brand-on); background: color-mix(in srgb, var(--brand) 42%, white); border-color: color-mix(in srgb, var(--brand) 70%, var(--line)); }
 .chip:hover { background: var(--hover); }
 .ask-send {
   width: 32px; height: 32px;

@@ -1,9 +1,12 @@
 import { DEFAULT_TENANT_ID, permissions } from "@phi-ba/contracts";
 import { nowIso } from "@phi-ba/shared";
+import { BANKING_ALLOWED_COLUMNS, BANKING_ALLOWED_TABLES, BANKING_DEMO_ROW_COUNTS } from "./banking-demo-data.js";
 import type { PermissionKey } from "@phi-ba/contracts";
 import type { PlatformState } from "./platform-types.js";
 
 const allPermissions = Object.values(permissions);
+const defaultModel = process.env.LLM_MODEL ?? "gpt-5.4-mini";
+const defaultTextToSqlModel = process.env.TEXT_TO_SQL_MODEL ?? defaultModel;
 const analystPermissions: PermissionKey[] = [
   permissions.configRead,
   permissions.connectorsRead,
@@ -113,8 +116,8 @@ export function createSeedState(): PlatformState {
         ],
         industryDomainPack: "banking",
         modelPolicy: {
-          provider: process.env.LLM_PROVIDER ?? "mock",
-          allowedModels: [process.env.LLM_MODEL ?? "mock-enterprise-analyst"],
+          provider: process.env.LLM_PROVIDER ?? "openai",
+          allowedModels: Array.from(new Set([defaultModel, defaultTextToSqlModel])),
           piiMode: "mask_required"
         },
         dataResidencyPolicy: {
@@ -186,6 +189,9 @@ export function createSeedState(): PlatformState {
         config: {
           host: "localhost",
           database: "phi_ba",
+          databaseUrlEnv: "DATABASE_URL",
+          dataset: "synthetic-banking-demo",
+          rowCounts: BANKING_DEMO_ROW_COUNTS,
           role: "readonly",
           ssl: false,
           timeoutMs: 8000
@@ -193,15 +199,8 @@ export function createSeedState(): PlatformState {
         secretReferenceId: "secret_pg_reporting",
         status: "healthy",
         permissions: [permissions.connectorsExecute],
-        allowedTables: ["islemler", "musteriler", "urunler", "risk_izleme", "kart_islemleri", "mobil_kullanim"],
-        allowedColumns: {
-          islemler: ["id", "musteri_id", "urun_id", "tutar", "durum", "gerceklesme_tarihi"],
-          musteriler: ["id", "segment", "edinim_kanali"],
-          urunler: ["id", "ad", "kategori"],
-          risk_izleme: ["urun_adi", "segment", "npl_orani", "aktif_musteri", "riskli_bakiye", "rapor_donemi"],
-          kart_islemleri: ["kanal", "saat_dilimi", "onay_orani", "reddedilen_islem", "kayip_hacim", "islem_tarihi"],
-          mobil_kullanim: ["kohort", "segment", "retention_90d", "aktif_musteri", "beklenen_gelir", "edinim_kanali"]
-        }
+        allowedTables: [...BANKING_ALLOWED_TABLES],
+        allowedColumns: BANKING_ALLOWED_COLUMNS
       },
       {
         id: "connector_rest_markets",
@@ -303,7 +302,7 @@ export function createSeedState(): PlatformState {
           {
             id: "prompt_sql_v1",
             version: 1,
-            body: "Generate read-only PostgreSQL SQL using only the allowed schema.",
+            body: "You generate one safe PostgreSQL SELECT for a Turkish or English banking analytics question.\n\nRules:\n- Output SQL only, no markdown, no explanation, no semicolon.\n- Use only the allowed schema below.\n- Prefer reporting views when they answer the question.\n- Never select raw PII or unrestricted customer-level data.\n- Keep LIMIT <= 10.\n- The platform will run separate tenant, RBAC, audit, read-only, and allowlist checks before execution.\n\nQuestion:\n{{question}}\n\nAllowed schema:\n{{schema_context}}\n\nBusiness hints:\n{{business_context}}",
             createdAt: now
           }
         ]

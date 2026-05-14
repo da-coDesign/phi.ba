@@ -6,7 +6,7 @@ This repository contains a local MVP of the white-label, tenant-aware phi.ba pla
 
 - `apps/api`: Fastify REST API with tenant-scoped request context, local dev auth, RBAC, audit logging, Safety Gates, connectors, text-to-SQL, RAG, LLM gateway, agents, workflows/actions, approvals, alerts, market intelligence, simulation, and observability endpoints.
 - `apps/web`: Next.js tenant-aware admin console for setup, white-label settings, users/roles, connectors, glossary, metrics, prompts, agents, query playground, RAG, alerts, market sources, approvals, simulations, Safety Gates, audit, and observability.
-- `prisma`: PostgreSQL/pgvector schema, baseline migration, and seed script.
+- `prisma`: PostgreSQL/pgvector schema, baseline migration, banking demo dataset migration, and seed scripts.
 - `tests`: Vitest coverage for tenant isolation, RBAC, secret references, SQL safety, Safety Gate blocking, connector validation, agent tool permissions, approval requirements, audit logging, alerts, market governance, and simulation sandboxing.
 
 ## Local Setup
@@ -18,8 +18,25 @@ docker compose up -d
 npm run db:generate
 npm run db:migrate
 npm run db:seed
+npm run db:seed:banking-demo
 npm run dev
 ```
+
+Set a fresh server-side OpenAI key in `.env` before asking live agent questions:
+
+```bash
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-5.4-mini
+TEXT_TO_SQL_MODE=llm
+TEXT_TO_SQL_MODEL=gpt-5.4-mini
+OPENAI_API_KEY=sk-proj-your-fresh-key
+```
+
+Do not commit `.env` or paste production keys into chat. If `OPENAI_API_KEY` is missing, the agent returns a connection error instead of fabricated analysis.
+
+If Postgres is not available, the API still answers governed demo questions through a deterministic synthetic fallback. Set `BANKING_DEMO_FORCE_FALLBACK=true` to force that mode.
+
+For Vercel, do not leave `NEXT_PUBLIC_API_BASE_URL` pointed at `http://localhost:4000`. The deployed web app must point to a reachable API deployment URL, while local development can keep `http://localhost:4000`.
 
 Local API headers:
 
@@ -54,7 +71,7 @@ curl -s http://localhost:4000/api/v1/natural-language-query \
   -H "authorization: Bearer dev-admin-token" \
   -H "x-tenant-id: tenant_fibabanka" \
   -H "content-type: application/json" \
-  -d '{"question":"Son 30 günde işlem hacmine göre en çok kullanılan 10 segment","execute":true}'
+  -d '{"question":"Kart onay oranı neden düştü, hangi segment ve kanalda kayıp hacim yüksek?","execute":true}'
 ```
 
 Manual Safety Gate run:
@@ -64,7 +81,17 @@ curl -s http://localhost:4000/api/v1/safety-gates/run \
   -H "authorization: Bearer dev-admin-token" \
   -H "x-tenant-id: tenant_fibabanka" \
   -H "content-type: application/json" \
-  -d '{"operationType":"sql_query","connectorId":"connector_pg_reporting","requiredPermission":"query:execute","sql":"SELECT urun_adi, segment FROM risk_izleme LIMIT 5"}'
+  -d '{"operationType":"sql_query","connectorId":"connector_pg_reporting","requiredPermission":"query:execute","sql":"SELECT product_name, segment, risk_band, npl_ratio_pct FROM v_credit_risk_snapshot LIMIT 5"}'
+```
+
+Realtime central-input agent stream:
+
+```bash
+curl -N http://localhost:4000/api/v1/agents/agent_risk/stream \
+  -H "authorization: Bearer dev-admin-token" \
+  -H "x-tenant-id: tenant_fibabanka" \
+  -H "content-type: application/json" \
+  -d '{"message":"Mobil retention ve kampanya dönüşümünü segment bazında yorumla"}'
 ```
 
 RAG ingest and retrieve:
@@ -95,11 +122,12 @@ curl -s http://localhost:4000/api/v1/sentry/run \
   -d '{"metricKey":"marketplace_credit_volume","currentValue":72,"baselineValue":100}'
 ```
 
-## Mocked Locally
+## Local Placeholders
 
-- LLM responses and embeddings use local mock providers.
-- PostgreSQL connector execution returns deterministic mock rows unless production adapter work is added.
-- OpenAI-compatible, Azure OpenAI, Anthropic, Gemini, Vault/KMS, OIDC, SAML, SCIM, SFTP, SharePoint, Slack, Teams, Jira, and email are adapter placeholders.
+- LLM calls default to real OpenAI Responses API calls. Tests use an explicit `data-grounded-local` provider so CI does not require an external key.
+- Text-to-SQL defaults to LLM generation; tests can set `TEXT_TO_SQL_MODE=template` for deterministic safety coverage.
+- PostgreSQL connector executes read-only SQL against `DATABASE_URL` when available, then falls back to deterministic synthetic banking rows if local DB is unavailable.
+- Azure OpenAI, Anthropic, Gemini, Vault/KMS, OIDC, SAML, SCIM, SFTP, SharePoint, Slack, Teams, Jira, and email are adapter placeholders.
 - Market intelligence uses governed example data and does not scrape.
 - Simulation is deterministic foundation logic, not a production ML engine.
 

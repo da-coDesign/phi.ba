@@ -1,9 +1,14 @@
 import { permissions, type RequestContext } from "@phi-ba/contracts";
 import { createId } from "@phi-ba/shared";
+import pg from "pg";
+import { executeBankingDemoQuery } from "./banking-demo-data.js";
 import { blocked } from "./errors.js";
 import { safetyGateService } from "./safety-gates.js";
 import { store, type PlatformStore } from "./store.js";
 import type { Connector, JsonRecord } from "./platform-types.js";
+
+const { Pool } = pg;
+const pools = new Map<string, pg.Pool>();
 
 export interface ConnectorAdapter {
   type: Connector["type"];
@@ -25,18 +30,59 @@ class PostgreSqlConnectorAdapter implements ConnectorAdapter {
   }
 
   health(connector: Connector): { status: Connector["status"]; message: string } {
-    return { status: connector.status, message: `PostgreSQL connector ${connector.name} is ${connector.status}.` };
+    const databaseUrlEnv = typeof connector.config.databaseUrlEnv === "string" ? connector.config.databaseUrlEnv : "DATABASE_URL";
+    const hasDatabaseUrl = Boolean(process.env[databaseUrlEnv]);
+    const mode = hasDatabaseUrl && process.env.BANKING_DEMO_FORCE_FALLBACK !== "true" ? "postgres" : "synthetic fallback";
+    return { status: connector.status, message: `PostgreSQL connector ${connector.name} is ${connector.status}; execution mode is ${mode}.` };
   }
 
   test(connector: Connector): { ok: boolean; message: string } {
-    return { ok: connector.status !== "unknown", message: "Local MVP validates config without opening production database connections." };
+    const databaseUrlEnv = typeof connector.config.databaseUrlEnv === "string" ? connector.config.databaseUrlEnv : "DATABASE_URL";
+    return {
+      ok: connector.status !== "unknown",
+      message: process.env[databaseUrlEnv]
+        ? `Read-only connection will use ${databaseUrlEnv}; run a governed query to verify permissions.`
+        : "DATABASE_URL is not set; connector will use deterministic synthetic fallback rows."
+    };
   }
 
   async execute(connector: Connector, payload: JsonRecord): Promise<JsonRecord> {
+    const sql = typeof payload.sql === "string" ? payload.sql : "";
+    if (!sql) {
+      return { connectorId: connector.id, mode: "postgres-readonly", rows: [], rowCount: 0, executedAt: new Date().toISOString() };
+    }
+    const startedAt = Date.now();
+    const timeoutMs = Math.min(Number(payload.timeoutMs ?? connector.config.timeoutMs ?? 8000), 15000);
+    const databaseUrl = resolveDatabaseUrl(connector);
+    if (databaseUrl && process.env.BANKING_DEMO_FORCE_FALLBACK !== "true") {
+      try {
+        const result = await runPostgresQuery(databaseUrl, sql, timeoutMs);
+        return {
+          connectorId: connector.id,
+          mode: "postgres-readonly",
+          source: "postgres",
+          rows: result.rows,
+          rowCount: result.rowCount,
+          columns: result.fields.map((field) => field.name),
+          queryMs: Date.now() - startedAt,
+          executedAt: new Date().toISOString()
+        };
+      } catch {
+        if (connector.config.disableSyntheticFallback === true) {
+          throw blocked("PostgreSQL execution failed; verify DATABASE_URL, migrations, seed data, and read-only permissions.");
+        }
+      }
+    }
+    const fallback = executeBankingDemoQuery(sql);
     return {
       connectorId: connector.id,
-      mode: "mock-readonly",
-      rows: payload.sql ? mockRowsForSql(String(payload.sql)) : [],
+      mode: "synthetic-readonly",
+      source: fallback.source,
+      topic: fallback.topic,
+      rows: fallback.rows,
+      rowCount: fallback.rowCount,
+      warning: databaseUrl ? "PostgreSQL was unavailable; synthetic fallback rows were used." : "DATABASE_URL is not set; synthetic fallback rows were used.",
+      queryMs: Date.now() - startedAt,
       executedAt: new Date().toISOString()
     };
   }
@@ -105,24 +151,6 @@ class PlaceholderConnectorAdapter implements ConnectorAdapter {
   async execute(connector: Connector): Promise<JsonRecord> {
     return { connectorId: connector.id, skipped: true, reason: "Production adapter placeholder." };
   }
-}
-
-function mockRowsForSql(sql: string): JsonRecord[] {
-  if (/risk_izleme/i.test(sql)) {
-    return [
-      { urun_adi: "Ticari Kredi", segment: "KOBI", npl_orani: 8.4, aktif_musteri: 6210, riskli_bakiye: 31800000 },
-      { urun_adi: "Ihtiyac Kredisi", segment: "Bireysel", npl_orani: 6.9, aktif_musteri: 28940, riskli_bakiye: 26750000 }
-    ];
-  }
-  if (/kart_islemleri/i.test(sql)) {
-    return [
-      { kanal: "Sanal POS", saat_dilimi: "18:00-20:00", onay_orani: 71.8, reddedilen_islem: 21840, kayip_hacim: 12100000 }
-    ];
-  }
-  return [
-    { urun: "Kredi Karti Premium", segment: "Ust Gelir", islem_adedi: 184210, islem_hacmi: 91428000 },
-    { urun: "Konut Kredisi", segment: "Bireysel", islem_adedi: 9120, islem_hacmi: 76452000 }
-  ];
 }
 
 export class ConnectorRegistry {
@@ -229,14 +257,27 @@ export class ConnectorService {
 
   async execute(context: RequestContext, connectorId: string, payload: JsonRecord): Promise<JsonRecord> {
     const connector = this.repository.getConnector(context.tenantId, connectorId);
-    safetyGateService.assertAllowed(context, {
-      tenantId: context.tenantId,
-      operationType: "connector",
-      operationId: connector.id,
-      connectorId: connector.id,
-      requiredPermission: permissions.connectorsExecute,
-      payload
-    });
+    if (connector.type === "postgresql" && typeof payload.sql === "string") {
+      safetyGateService.assertAllowed(context, {
+        tenantId: context.tenantId,
+        operationType: "sql_query",
+        operationId: connector.id,
+        connectorId: connector.id,
+        requiredPermission: permissions.queryExecute,
+        sql: payload.sql,
+        maskingEnabled: Boolean(payload.maskingEnabled ?? true),
+        payload
+      });
+    } else {
+      safetyGateService.assertAllowed(context, {
+        tenantId: context.tenantId,
+        operationType: "connector",
+        operationId: connector.id,
+        connectorId: connector.id,
+        requiredPermission: permissions.connectorsExecute,
+        payload
+      });
+    }
     const output = await this.registry.get(connector.type).execute(connector, payload);
     this.repository.appendAudit({
       tenantId: context.tenantId,
@@ -246,10 +287,50 @@ export class ConnectorService {
       resourceType: "connector",
       resourceId: connector.id,
       correlationId: context.correlationId,
-      metadata: { payload, output }
+      metadata: {
+        payload: { ...payload, sql: typeof payload.sql === "string" ? payload.sql : undefined },
+        output: {
+          mode: output.mode,
+          source: output.source,
+          topic: output.topic,
+          rowCount: output.rowCount ?? (Array.isArray(output.rows) ? output.rows.length : 0)
+        }
+      }
     });
     return output;
   }
 }
 
 export const connectorService = new ConnectorService(store);
+
+function resolveDatabaseUrl(connector: Connector): string | undefined {
+  const databaseUrlEnv = typeof connector.config.databaseUrlEnv === "string" ? connector.config.databaseUrlEnv : "DATABASE_URL";
+  const value = process.env[databaseUrlEnv];
+  return value?.trim() ? value : undefined;
+}
+
+async function runPostgresQuery(databaseUrl: string, sql: string, timeoutMs: number): Promise<pg.QueryResult<JsonRecord>> {
+  const poolKey = `${databaseUrl}:${timeoutMs}`;
+  let pool = pools.get(poolKey);
+  if (!pool) {
+    pool = new Pool({
+      connectionString: databaseUrl,
+      max: 4,
+      idleTimeoutMillis: 10000,
+      connectionTimeoutMillis: Math.min(timeoutMs, 5000),
+      query_timeout: timeoutMs
+    });
+    pools.set(poolKey, pool);
+  }
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      pool.query<JsonRecord>(sql),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("query_timeout")), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}

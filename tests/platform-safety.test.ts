@@ -10,6 +10,7 @@ import { sentryService } from "../apps/api/src/sentry.js";
 import { simulationService } from "../apps/api/src/simulation.js";
 import { isReadOnlySql } from "../apps/api/src/sql-safety.js";
 import { store } from "../apps/api/src/store.js";
+import { textToSqlService } from "../apps/api/src/text-to-sql.js";
 import { workflowService } from "../apps/api/src/workflows.js";
 
 function context(userId = "user_admin", roles = ["Admin"], granted = Object.values(permissions)): RequestContext {
@@ -25,7 +26,17 @@ function context(userId = "user_admin", roles = ["Admin"], granted = Object.valu
 
 describe("enterprise safety controls", () => {
   beforeEach(() => {
+    process.env.LLM_PROVIDER = "data-grounded-local";
+    process.env.LLM_MODEL = "data-grounded-local";
+    process.env.TEXT_TO_SQL_MODE = "template";
     store.reset();
+    store.updateTenantConfig("tenant_fibabanka", {
+      modelPolicy: {
+        provider: "data-grounded-local",
+        allowedModels: ["data-grounded-local"],
+        piiMode: "mask_required"
+      }
+    });
   });
 
   it("blocks cross-tenant operations", () => {
@@ -127,8 +138,42 @@ describe("enterprise safety controls", () => {
     }
 
     expect(final.result.mode).toBe("data_card");
-    expect(final.result.sql).toContain("kart_islemleri");
+    expect(final.result.sql).toContain("v_card_approval_daily");
     expect(final.result.rows.length).toBeGreaterThan(0);
+  });
+
+  it("routes broad banking topics to allowlisted reporting views", () => {
+    expect(textToSqlService.generateSql("Fraud alert hacmini göster").sql).toContain("v_fraud_alerts");
+    expect(textToSqlService.generateSql("Şube mevduat performansı").sql).toContain("v_branch_kpi");
+    expect(textToSqlService.generateSql("Kampanya dönüşüm oranı").sql).toContain("v_campaign_conversion");
+    expect(textToSqlService.generateSql("Tahsilat bucket bazında nasıl?").sql).toContain("v_collections_snapshot");
+  });
+
+  it("uses deterministic synthetic banking fallback when Postgres is unavailable", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    delete process.env.DATABASE_URL;
+    let result: any;
+    try {
+      result = await connectorService.execute(context(), "connector_pg_reporting", {
+        sql: "SELECT product_name, segment, channel, txn_count, txn_volume_try, marketplace_volume_try, successful_txn_count FROM v_transaction_volume LIMIT 10",
+        timeoutMs: 100
+      });
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+    }
+    expect(result.mode).toBe("synthetic-readonly");
+    expect(result.source).toBe("fallback-synthetic");
+    expect(result.rowCount).toBeGreaterThan(0);
+  });
+
+  it("does not let direct connector execution bypass SQL safety", async () => {
+    await expect(connectorService.execute(context(), "connector_pg_reporting", {
+      sql: "DELETE FROM bank_transactions"
+    })).rejects.toThrow(ApiError);
   });
 
   it("asks for clarification instead of forcing one-shot execution", async () => {

@@ -13,12 +13,18 @@ const STORAGE_KEYS = {
   boards: "phi.ba.board-items.v1"
 };
 
-const API_BASE = window.PHI_BA_API_BASE_URL || "http://localhost:4000";
-const API_HEADERS = {
-  "content-type": "application/json",
-  authorization: "Bearer dev-admin-token",
-  "x-tenant-id": "tenant_fibabanka"
-};
+const OPENAI_KEY_STORAGE = "phi.ba.openai-api-key.v1";
+const API_BASE = window.PHI_BA_API_BASE_URL || (window.location.hostname === "localhost" ? "http://localhost:4000" : window.location.origin);
+function buildApiHeaders() {
+  const headers = {
+    "content-type": "application/json",
+    authorization: "Bearer dev-admin-token",
+    "x-tenant-id": "tenant_fibabanka"
+  };
+  const openAiApiKey = window.localStorage.getItem(OPENAI_KEY_STORAGE);
+  if (openAiApiKey) headers["x-openai-api-key"] = openAiApiKey;
+  return headers;
+}
 const DEFAULT_AGENT_ID = "agent_risk";
 
 const SAMPLE_PROMPTS = [
@@ -464,11 +470,16 @@ function buildAgentResult(question, answer, fallbackRevision = 0, finalPayload) 
   }
   return {
     ...base,
-    mode: "data_card",
+    mode: "text",
+    columns: [],
+    rows: [],
+    stats: [],
+    sql: "",
+    tables: [],
     intro: answer || base.intro,
     insight: answer || base.insight,
     agentAnswer: answer,
-    boardable: true,
+    boardable: false,
     latencyMs: Math.max(120, Math.min(1800, answer.length * 3)),
     generatedAt: new Date().toISOString()
   };
@@ -499,7 +510,7 @@ function buildStatsFromServerRows(rows, columns) {
 async function streamAgentAnswer(question, onEvent) {
   const response = await fetch(`${API_BASE}/api/v1/agents/${DEFAULT_AGENT_ID}/stream`, {
     method: "POST",
-    headers: API_HEADERS,
+    headers: buildApiHeaders(),
     body: JSON.stringify({ message: question })
   });
   if (!response.ok || !response.body) throw new Error(`Agent stream failed (${response.status})`);
@@ -519,6 +530,8 @@ async function streamAgentAnswer(question, onEvent) {
       const parsed = parseSseFrame(frame);
       if (!parsed) continue;
       if (parsed.event === "token") onEvent({ type: "token", token: String(parsed.data.token || "") });
+      if (parsed.event === "sql_delta") onEvent({ type: "sql_delta", token: String(parsed.data.token || "") });
+      if (parsed.event === "sql_done") onEvent({ type: "sql_done", sql: String(parsed.data.sql || "") });
       if (parsed.event === "progress") onEvent({ type: "progress", message: String(parsed.data.message || "") });
       if (parsed.event === "tool") onEvent({ type: "tool", message: `${parsed.data.toolKey || "tool"} tamamlandı`, data: parsed.data });
       if (parsed.event === "done") finalPayload = parsed.data;
@@ -810,7 +823,7 @@ function SidebarFull({
 }
 
 // ---------- Ask Box ----------
-function AskBox({ value, onChange, onSubmit, big, placeholder, chips }) {
+function AskBox({ value, onChange, onSubmit, big, placeholder, chips, onConfigureKey, hasOpenAiKey }) {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -842,6 +855,14 @@ function AskBox({ value, onChange, onSubmit, big, placeholder, chips }) {
           )}
           <button className="chip chip-add"><Icon name="plus" size={11} /></button>
         </div>
+        {onConfigureKey &&
+          <button
+            className={"chip chip-key" + (hasOpenAiKey ? " is-set" : "")}
+            onClick={onConfigureKey}
+            title={hasOpenAiKey ? "OpenAI key hazır" : "OpenAI key ekle"}>
+            <Icon name="settings" size={11} />
+          </button>
+        }
         <button className="ask-send" disabled={!value.trim()} onClick={onSubmit} title="Gönder (↵)">
           <Icon name="send" size={14} />
         </button>
@@ -851,7 +872,7 @@ function AskBox({ value, onChange, onSubmit, big, placeholder, chips }) {
 }
 
 // ---------- Home Screen ----------
-function HomeScreen({ tenantName, onAsk }) {
+function HomeScreen({ tenantName, onAsk, onConfigureKey, hasOpenAiKey }) {
   const [value, setValue] = useState("");
 
   return (
@@ -868,6 +889,8 @@ function HomeScreen({ tenantName, onAsk }) {
             value={value}
             onChange={setValue}
             onSubmit={() => value.trim() && onAsk(value.trim())}
+            onConfigureKey={onConfigureKey}
+            hasOpenAiKey={hasOpenAiKey}
             placeholder="örn. Son 30 günde işlem hacmine göre en çok kullanılan 10 ürün" />
         </div>
 
@@ -1134,7 +1157,7 @@ function ThinkingMessage({ content }) {
 }
 
 // ---------- Conversation Screen ----------
-function ConversationScreen({ messages, onAsk, onSaveToBoard, onOpenBoards, boardCount, showSqlDefault }) {
+function ConversationScreen({ messages, onAsk, onSaveToBoard, onOpenBoards, boardCount, showSqlDefault, onConfigureKey, hasOpenAiKey }) {
   const [value, setValue] = useState("");
   const scrollRef = useRef(null);
 
@@ -1188,6 +1211,8 @@ function ConversationScreen({ messages, onAsk, onSaveToBoard, onOpenBoards, boar
               onAsk(value.trim());
               setValue("");
             }}
+            onConfigureKey={onConfigureKey}
+            hasOpenAiKey={hasOpenAiKey}
             placeholder="Devam sorusu sor… (örn. bunu haftalık olarak ayır)" />
 
           <div className="composer-foot">
@@ -1528,6 +1553,7 @@ function App() {
   const [boardItems, setBoardItems] = useState(readStoredBoardItems);
   const [boardNotice, setBoardNotice] = useState("");
   const [drawer, setDrawer] = useState(null);
+  const [hasOpenAiKey, setHasOpenAiKey] = useState(() => Boolean(window.localStorage.getItem(OPENAI_KEY_STORAGE)));
   const timeoutsRef = useRef(new Map());
   const prevViewRef = useRef("home");
 
@@ -1573,10 +1599,20 @@ function App() {
 
     try {
       let streamed = "";
+      let streamedSql = "";
       const steps = [];
-      const renderStream = () => [steps.length ? steps.map((step) => `• ${step}`).join("\n") : "", streamed].filter(Boolean).join("\n\n");
+      const renderStream = () => [
+        steps.length ? steps.map((step) => `• ${step}`).join("\n") : "",
+        streamedSql ? `SQL üretiliyor:\n${streamedSql}` : "",
+        streamed
+      ].filter(Boolean).join("\n\n");
       const finalPayload = await streamAgentAnswer(text, (event) => {
         if (event.type === "token") streamed += event.token;
+        if (event.type === "sql_delta") streamedSql += event.token;
+        if (event.type === "sql_done") {
+          streamedSql = event.sql || streamedSql;
+          steps.push("SQL güvenlik kontrolünden geçiriliyor");
+        }
         if ((event.type === "progress" || event.type === "tool") && event.message) steps.push(event.message);
         setMessages((current) =>
           current.map((message) => message.id === id ? { ...message, streamText: renderStream() } : message)
@@ -1589,7 +1625,6 @@ function App() {
         )
       );
     } catch (error) {
-      const fallback = generateMockResult(text, 0);
       const message = error instanceof Error ? error.message : "Agent stream unavailable";
       setMessages((current) =>
         current.map((item) =>
@@ -1598,14 +1633,41 @@ function App() {
             status: "done",
             streamText: "",
             result: {
-              ...fallback,
-              intro: `Canlı agent bağlantısı kurulamadı: ${message}. Yerel demo cevabı gösteriyorum.`,
-              insight: fallback.insight
+              mode: "text",
+              question: text,
+              intro: `Canlı agent bağlantısı kurulamadı: ${message}`,
+              insight: "",
+              agentAnswer: "",
+              columns: [],
+              rows: [],
+              stats: [],
+              sql: "",
+              tables: [],
+              citations: [],
+              toolCalls: [],
+              boardable: false,
+              latencyMs: 0,
+              generatedAt: new Date().toISOString()
             }
           } : item
         )
       );
     }
+  };
+
+  const configureOpenAiKey = () => {
+    const existing = window.localStorage.getItem(OPENAI_KEY_STORAGE) || "";
+    const next = window.prompt("OpenAI API key", existing ? "••••" + existing.slice(-8) : "");
+    if (next == null) return;
+    const trimmed = next.trim();
+    if (!trimmed) {
+      window.localStorage.removeItem(OPENAI_KEY_STORAGE);
+      setHasOpenAiKey(false);
+      return;
+    }
+    if (trimmed.startsWith("••••") && existing) return;
+    window.localStorage.setItem(OPENAI_KEY_STORAGE, trimmed);
+    setHasOpenAiKey(true);
   };
 
   const newThread = () => {
@@ -1730,7 +1792,12 @@ function App() {
       )}
 
       <main className="main">
-        {view === "home" && <HomeScreen tenantName={tweaks.tenantName} onAsk={ask} />}
+        {view === "home" &&
+          <HomeScreen
+            tenantName={tweaks.tenantName}
+            onAsk={ask}
+            onConfigureKey={configureOpenAiKey}
+            hasOpenAiKey={hasOpenAiKey} />}
         {view === "convo" &&
           <ConversationScreen
             messages={messages}
@@ -1738,6 +1805,8 @@ function App() {
             onSaveToBoard={saveMessageToBoard}
             onOpenBoards={openBoards}
             boardCount={boardItems.length}
+            onConfigureKey={configureOpenAiKey}
+            hasOpenAiKey={hasOpenAiKey}
             showSqlDefault={tweaks.showSqlByDefault} />
         }
         {view === "boards" &&

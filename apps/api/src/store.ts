@@ -73,7 +73,7 @@ export class PlatformStore {
       locale: input.config?.locale ?? "en-US",
       enabledFeatures: input.config?.enabledFeatures ?? ["text_to_sql", "rag", "agents"],
       industryDomainPack: input.config?.industryDomainPack ?? "generic",
-      modelPolicy: input.config?.modelPolicy ?? { provider: "mock", allowedModels: ["mock-enterprise-analyst"] },
+      modelPolicy: input.config?.modelPolicy ?? { provider: "openai", allowedModels: ["gpt-5.4-mini"] },
       dataResidencyPolicy: input.config?.dataResidencyPolicy ?? { region: "local" },
       securityPolicy: input.config?.securityPolicy ?? {
         requireHumanApprovalForHighRisk: true,

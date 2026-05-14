@@ -43,9 +43,11 @@ export async function registerRequestContext(app: FastifyInstance): Promise<void
   app.addHook("onRequest", async (request: FastifyRequest, reply: FastifyReply) => {
     const correlationHeader = request.headers["x-correlation-id"];
     const tenantHeader = request.headers["x-tenant-id"];
+    const openAiApiKeyHeader = request.headers["x-openai-api-key"];
     const auth = request.headers.authorization;
     const token = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : undefined;
     const tenantId = Array.isArray(tenantHeader) ? tenantHeader[0] : tenantHeader;
+    const openAiApiKey = Array.isArray(openAiApiKeyHeader) ? openAiApiKeyHeader[0] : openAiApiKeyHeader;
     const correlationId = (Array.isArray(correlationHeader) ? correlationHeader[0] : correlationHeader) ?? createId("corr");
 
     reply.header("x-correlation-id", correlationId);
@@ -57,7 +59,8 @@ export async function registerRequestContext(app: FastifyInstance): Promise<void
         email: "system@local",
         roles: ["System"],
         permissions: [],
-        correlationId
+        correlationId,
+        openAiApiKey: normalizeOpenAiApiKey(openAiApiKey)
       };
       return;
     }
@@ -75,7 +78,14 @@ export async function registerRequestContext(app: FastifyInstance): Promise<void
       email: user.email,
       roles: roles.map((role) => role.name),
       permissions: store.permissionsForUser(user.id, tenant.id),
-      correlationId
+      correlationId,
+      openAiApiKey: normalizeOpenAiApiKey(openAiApiKey)
     };
   });
+}
+
+function normalizeOpenAiApiKey(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return /^sk-[A-Za-z0-9_-]+$/.test(trimmed) ? trimmed : undefined;
 }

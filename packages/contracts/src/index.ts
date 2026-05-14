@@ -92,6 +92,7 @@ export interface RequestContext {
   roles: string[];
   permissions: PermissionKey[];
   correlationId: string;
+  openAiApiKey?: string;
 }
 
 export interface ApiEnvelope<T> {

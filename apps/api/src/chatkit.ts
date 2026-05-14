@@ -14,7 +14,7 @@ export class ChatKitService {
 
   async createSession(context: RequestContext): Promise<{ client_secret: string; workflowId: string }> {
     requirePermission(context, permissions.agentsExecute);
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = context.openAiApiKey ?? process.env.OPENAI_API_KEY;
     if (!apiKey) throw blocked("OPENAI_API_KEY is required to create an OpenAI ChatKit session.");
 
     const workflowId = this.getWorkflowId();

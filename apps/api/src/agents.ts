@@ -7,7 +7,7 @@ import { ragService } from "./rag.js";
 import { safetyGateService } from "./safety-gates.js";
 import { simulationService } from "./simulation.js";
 import { store, type PlatformStore } from "./store.js";
-import { textToSqlService } from "./text-to-sql.js";
+import { textToSqlService, type SqlGenerationResult } from "./text-to-sql.js";
 import { workflowService } from "./workflows.js";
 import type { Agent, AgentExecutionTrace, AgentTemplate, ApprovalRequest, JsonRecord, ToolDefinition } from "./platform-types.js";
 
@@ -20,7 +20,7 @@ export type AgentIntent =
   | "action_request"
   | "clarification_needed";
 
-type AgentStreamEvent = "meta" | "progress" | "tool" | "token" | "done";
+type AgentStreamEvent = "meta" | "progress" | "sql_delta" | "sql_done" | "tool" | "token" | "done";
 
 interface AgentDecision {
   intent: AgentIntent;
@@ -91,7 +91,7 @@ export class AgentService {
 
     const decision = decideAgentPath(input.message, input.toolKey);
     const operationId = createId("agent_run");
-    const model = process.env.LLM_MODEL ?? "mock-enterprise-analyst";
+    const model = process.env.LLM_MODEL ?? "gpt-5.4-mini";
     const selectedTool = decision.toolKey ? this.tools.get(decision.toolKey) : undefined;
     const safetyRuns = safetyGateService.runForOperation(context, {
       tenantId: context.tenantId,
@@ -147,6 +147,17 @@ export class AgentService {
         toolCalls: [],
         boardable: false
       };
+    } else if (decision.intent === "data_query") {
+      yield { event: "progress", data: { message: "LLM SQL planı üretiyor", toolKey: "query.run" } };
+      let query: SqlGenerationResult | undefined;
+      for await (const chunk of textToSqlService.askStream(context, { question: input.message, execute: true, maskingEnabled: true })) {
+        if (chunk.event === "sql_delta") yield { event: "sql_delta", data: chunk.data };
+        if (chunk.event === "sql_done") yield { event: "sql_done", data: chunk.data };
+        if (chunk.event === "done") query = chunk.data as unknown as SqlGenerationResult;
+      }
+      if (!query) throw blocked("Text-to-SQL did not produce a query result.");
+      toolResult = buildDataToolResult(input.message, query);
+      yield { event: "tool", data: { toolKey: "query.run", status: "completed", mode: toolResult.mode, result: summarizeToolResult(toolResult) } };
     } else if (decision.toolKey) {
       yield { event: "progress", data: { message: `${decision.toolKey} hazırlanıyor`, toolKey: decision.toolKey } };
       toolResult = await this.executeTool(context, decision, input.message, input.approvalId);
@@ -197,23 +208,7 @@ export class AgentService {
   private async executeTool(context: RequestContext, decision: AgentDecision, message: string, approvalId?: string): Promise<AgentToolResult> {
     if (decision.intent === "data_query") {
       const query = await textToSqlService.ask(context, { question: message, execute: true, maskingEnabled: true });
-      const rawRows = Array.isArray(query.result?.rows) ? query.result.rows as JsonRecord[] : [];
-      const columns = inferColumns(rawRows);
-      const rows = rawRows.map((row) => columns.map((column) => row[column.key ?? column.label]));
-      return {
-        mode: "data_card",
-        answer: buildDataAnswer(message, rawRows, query.confidenceScore),
-        toolCalls: [{ toolKey: "query.run", status: "completed", traceId: query.traceId }],
-        sql: query.sql,
-        rows,
-        columns,
-        stats: buildStats(rawRows, columns),
-        traceId: query.traceId,
-        category: /npl|risk|onay|approval|düştü|dustu/i.test(message) ? "ops" : "reporting",
-        recommendedAction: /npl|risk|onay|approval|düştü|dustu/i.test(message) ? "jira" : "deck",
-        boardable: true,
-        raw: query as unknown as JsonRecord
-      };
+      return buildDataToolResult(message, query);
     }
 
     if (decision.intent === "knowledge_rag") {
@@ -395,11 +390,11 @@ export function classifyAgentIntent(message: string): AgentIntent {
   const normalized = message.toLocaleLowerCase("tr-TR").trim();
   if (!normalized) return "clarification_needed";
   if (/^(merhaba|selam|hi|hello|teşekkür|tesekkur)\b/.test(normalized)) return "direct_answer";
-  if (/(jira|ticket|epic|email|e-mail|mail|slack|teams|görev|gorev|bildirim|aksiyon|kampanya|sunum|deck|oluştur|olustur|aç|ac|gönder|gonder)/.test(normalized)) return "action_request";
+  if (/(jira|ticket|epic|email|e-mail|mail|slack|teams|görev|gorev|bildirim|aksiyon|sunum|deck|oluştur|olustur|aç|ac|gönder|gonder)/.test(normalized)) return "action_request";
   if (/(simülasyon|simulasyon|what[- ]?if|ne olur|senaryo|faiz.*(etki|değiş|degis)|oran.*(artarsa|düşerse|duserse))/.test(normalized)) return "simulation";
   if (/(rakip|competitor|pazar|market|faiz oran|interest rate|karşılaştır|karsilastir)/.test(normalized)) return "market_compare";
   if (/(doküman|dokuman|belge|politika|policy|prosedür|prosedur|sözlük|sozluk|tanım|definition|approval policy|onay politikası)/.test(normalized)) return "knowledge_rag";
-  if (/(npl|risk|onay|approval|kart|hacim|segment|müşteri|musteri|ürün|urun|metrik|trend|düştü|dustu|arttı|artti|neden|hangi|kaç|kac|liste|top|son \d+|retention|tutunma|kohort|cohort)/.test(normalized)) return "data_query";
+  if (/(npl|risk|onay|approval|kart|card|hacim|volume|segment|müşteri|musteri|customer|ürün|urun|product|metrik|trend|düştü|dustu|arttı|artti|neden|hangi|kaç|kac|liste|top|son \d+|retention|tutunma|kohort|cohort|şikayet|sikayet|complaint|fraud|dolandır|dolandir|tahsilat|collections|şube|sube|branch|kampanya|campaign|dönüşüm|donusum|mevduat|deposit|bakiye|balance)/.test(normalized)) return "data_query";
   if (normalized.length < 12) return "clarification_needed";
   return "direct_answer";
 }
@@ -463,11 +458,34 @@ function buildStats(rows: JsonRecord[], columns: Array<{ key?: string; label: st
   }));
 }
 
-function buildDataAnswer(message: string, rows: JsonRecord[], confidenceScore: number): string {
+function buildDataToolResult(message: string, query: SqlGenerationResult): AgentToolResult {
+  const rawRows = Array.isArray(query.result?.rows) ? query.result.rows as JsonRecord[] : [];
+  const columns = inferColumns(rawRows);
+  const rows = rawRows.map((row) => columns.map((column) => row[column.key ?? column.label]));
+  return {
+    mode: "data_card",
+    answer: buildDataAnswer(rawRows, query.confidenceScore, query as unknown as JsonRecord),
+    toolCalls: [{ toolKey: "query.run", status: "completed", traceId: query.traceId, source: query.result?.source }],
+    sql: query.sql,
+    rows,
+    columns,
+    stats: buildStats(rawRows, columns),
+    traceId: query.traceId,
+    category: /npl|risk|onay|approval|düştü|dustu|fraud|şikayet|sikayet|tahsilat/i.test(message) ? "ops" : "reporting",
+    recommendedAction: /npl|risk|onay|approval|düştü|dustu|fraud|şikayet|sikayet|tahsilat/i.test(message) ? "jira" : "deck",
+    boardable: true,
+    raw: query as unknown as JsonRecord
+  };
+}
+
+function buildDataAnswer(rows: JsonRecord[], confidenceScore: number, query: JsonRecord): string {
   const lead = rows[0];
   if (!lead) return "Güvenli read-only sorgu çalıştı ancak sonuç dönmedi.";
   const leadText = Object.values(lead).slice(0, 2).join(" / ");
-  return `Read-only sorguyu çalıştırdım. ${rows.length} satır döndü; öne çıkan kayıt ${leadText}. Güven skoru ${(confidenceScore * 100).toFixed(0)}%.`;
+  const result = typeof query.result === "object" && query.result ? query.result as JsonRecord : {};
+  const source = String(result.source ?? result.mode ?? "connector");
+  const summary = typeof query.summary === "string" ? query.summary : `${rows.length} satır döndü.`;
+  return `Read-only sorguyu çalıştırdım (${source}). ${summary} Öne çıkan kayıt ${leadText}. Güven skoru ${(confidenceScore * 100).toFixed(0)}%.`;
 }
 
 function summarizeToolResult(result: AgentToolResult): JsonRecord {

@@ -7,22 +7,30 @@ import type { JsonRecord, ModelUsage, PromptExecutionTrace } from "./platform-ty
 
 export interface ModelProvider {
   key: string;
-  complete(input: { model: string; prompt: string; variables?: JsonRecord }): Promise<{ text: string; tokenUsage: { input: number; output: number } }>;
-  stream?(input: { model: string; prompt: string; variables?: JsonRecord }): AsyncIterable<string>;
+  complete(input: ModelProviderInput): Promise<{ text: string; tokenUsage: { input: number; output: number } }>;
+  stream?(input: ModelProviderInput): AsyncIterable<string>;
 }
 
-class MockModelProvider implements ModelProvider {
-  key = "mock";
+interface ModelProviderInput {
+  model: string;
+  prompt: string;
+  variables?: JsonRecord;
+  apiKey?: string;
+}
 
-  async complete(input: { model: string; prompt: string; variables?: JsonRecord }): Promise<{ text: string; tokenUsage: { input: number; output: number } }> {
+class DataGroundedLocalProvider implements ModelProvider {
+  key = "data-grounded-local";
+
+  async complete(input: ModelProviderInput): Promise<{ text: string; tokenUsage: { input: number; output: number } }> {
     const userMessage = String(input.variables?.user_message ?? "");
     const agentName = String(input.variables?.agent ?? "phi.ba agent");
     const intent = String(input.variables?.intent ?? "direct_answer");
     const toolSummary = String(input.variables?.tool_summary ?? "");
     const toolKey = String(input.variables?.tool_key ?? "none");
+    const toolResult = typeof input.variables?.tool_result === "string" ? input.variables.tool_result : "";
     const text = userMessage
-      ? `${agentName}: Sorunu aldım. Niyet: ${intent}. ${toolKey !== "none" ? `Çalıştırılan güvenli araç: ${toolKey}. ` : ""}${toolSummary || "Bu istek için kısa, kontrollü bir yanıt hazırlıyorum."}\n\nSonraki adım: veri veya aksiyon canlı sisteme etki edecekse tenant izolasyonu, RBAC, denetim kaydı ve gerekiyorsa insan onayı tamamlanmadan ilerlemem.`
-      : `Mock ${input.model} response: ${input.prompt.slice(0, 160)}`;
+      ? `${agentName}: Sorunu aldım. Niyet: ${intent}. ${toolKey !== "none" ? `Çalıştırılan güvenli araç: ${toolKey}. ` : ""}${toolSummary || "Kısa, kontrollü bir yanıt hazırlıyorum."}${toolResult ? "\n\nYanıtı sadece platformun döndürdüğü sorgu/araç sonucuna dayandırdım." : ""}`
+      : `Data-grounded local provider response for ${input.model}: ${input.prompt.slice(0, 160)}`;
     return {
       text,
       tokenUsage: {
@@ -32,7 +40,7 @@ class MockModelProvider implements ModelProvider {
     };
   }
 
-  async *stream(input: { model: string; prompt: string; variables?: JsonRecord }): AsyncIterable<string> {
+  async *stream(input: ModelProviderInput): AsyncIterable<string> {
     const response = await this.complete(input);
     for (const token of response.text.split(/(\s+)/).filter(Boolean)) {
       yield token;
@@ -52,14 +60,7 @@ class PlaceholderModelProvider implements ModelProvider {
 class OpenAiCompatibleProvider implements ModelProvider {
   key = "openai-compatible";
 
-  constructor(
-    private readonly config = {
-      apiKey: process.env.OPENAI_API_KEY,
-      baseUrl: process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1"
-    }
-  ) {}
-
-  async complete(input: { model: string; prompt: string; variables?: JsonRecord }): Promise<{ text: string; tokenUsage: { input: number; output: number } }> {
+  async complete(input: ModelProviderInput): Promise<{ text: string; tokenUsage: { input: number; output: number } }> {
     const json = await this.request(input, false);
     const text = String(json.choices?.[0]?.message?.content ?? "");
     return {
@@ -71,12 +72,12 @@ class OpenAiCompatibleProvider implements ModelProvider {
     };
   }
 
-  async *stream(input: { model: string; prompt: string; variables?: JsonRecord }): AsyncIterable<string> {
-    if (!this.config.apiKey) throw blocked("OPENAI_API_KEY is required for openai-compatible streaming.");
-    const response = await fetch(`${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+  async *stream(input: ModelProviderInput): AsyncIterable<string> {
+    const apiKey = getOpenAiApiKey(input.apiKey);
+    const response = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${this.config.apiKey}`,
+        authorization: `Bearer ${apiKey}`,
         "content-type": "application/json"
       },
       body: JSON.stringify({
@@ -112,12 +113,12 @@ class OpenAiCompatibleProvider implements ModelProvider {
     }
   }
 
-  private async request(input: { model: string; prompt: string }, stream: boolean): Promise<any> {
-    if (!this.config.apiKey) throw blocked("OPENAI_API_KEY is required for openai-compatible model calls.");
-    const response = await fetch(`${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+  private async request(input: ModelProviderInput, stream: boolean): Promise<any> {
+    const apiKey = getOpenAiApiKey(input.apiKey);
+    const response = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${this.config.apiKey}`,
+        authorization: `Bearer ${apiKey}`,
         "content-type": "application/json"
       },
       body: JSON.stringify({
@@ -130,6 +131,84 @@ class OpenAiCompatibleProvider implements ModelProvider {
       })
     });
     if (!response.ok) throw blocked(`openai-compatible call failed with status ${response.status}`);
+    return response.json();
+  }
+}
+
+class OpenAiResponsesProvider implements ModelProvider {
+  key = "openai";
+
+  async complete(input: ModelProviderInput): Promise<{ text: string; tokenUsage: { input: number; output: number } }> {
+    const json = await this.request(input, false);
+    const text = extractResponseText(json);
+    return {
+      text,
+      tokenUsage: {
+        input: Number(json.usage?.input_tokens ?? Math.ceil(input.prompt.length / 4)),
+        output: Number(json.usage?.output_tokens ?? Math.ceil(text.length / 4))
+      }
+    };
+  }
+
+  async *stream(input: ModelProviderInput): AsyncIterable<string> {
+    const response = await fetch(`${getOpenAiBaseUrl()}/responses`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${getOpenAiApiKey(input.apiKey)}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: input.model,
+        instructions: "You are phi.ba, a governed enterprise banking data agent. Use supplied tool evidence only for factual data claims.",
+        input: input.prompt,
+        stream: true,
+        store: false
+      })
+    });
+    if (!response.ok || !response.body) throw blocked(`OpenAI Responses stream failed with status ${response.status}: ${await safeResponseText(response)}`);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        for (const line of frame.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice("data:".length).trim();
+          if (!data || data === "[DONE]") continue;
+          const parsed = JSON.parse(data) as JsonRecord;
+          if (parsed.type === "response.output_text.delta" && typeof parsed.delta === "string") {
+            yield parsed.delta;
+          }
+          if (parsed.type === "error") {
+            throw blocked(String((parsed.error as JsonRecord | undefined)?.message ?? "OpenAI streaming error"));
+          }
+        }
+      }
+    }
+  }
+
+  private async request(input: ModelProviderInput, stream: boolean): Promise<any> {
+    const response = await fetch(`${getOpenAiBaseUrl()}/responses`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${getOpenAiApiKey(input.apiKey)}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: input.model,
+        instructions: "You are phi.ba, a governed enterprise banking data agent. Use supplied tool evidence only for factual data claims.",
+        input: input.prompt,
+        stream,
+        store: false
+      })
+    });
+    if (!response.ok) throw blocked(`OpenAI Responses call failed with status ${response.status}: ${await safeResponseText(response)}`);
     return response.json();
   }
 }
@@ -156,7 +235,8 @@ export class LlmGatewayService {
   public readonly router = new ModelRouter();
 
   constructor(private readonly repository: PlatformStore) {
-    this.router.register(new MockModelProvider());
+    this.router.register(new DataGroundedLocalProvider());
+    this.router.register(new OpenAiResponsesProvider());
     this.router.register(new OpenAiCompatibleProvider());
     this.router.register(new PlaceholderModelProvider("azure-openai"));
     this.router.register(new PlaceholderModelProvider("anthropic"));
@@ -173,8 +253,8 @@ export class LlmGatewayService {
     const version = prompt.versions.at(-1);
     if (!version) throw blocked(`Prompt ${input.promptKey} has no version`);
     const config = this.repository.getTenantConfig(context.tenantId);
-    const providerKey = String(config.modelPolicy.provider ?? "mock");
-    const model = input.model ?? String((config.modelPolicy.allowedModels as string[] | undefined)?.[0] ?? "mock-enterprise-analyst");
+    const providerKey = String(process.env.LLM_PROVIDER ?? config.modelPolicy.provider ?? "openai");
+    const model = input.model ?? String(process.env.LLM_MODEL ?? (config.modelPolicy.allowedModels as string[] | undefined)?.[0] ?? "gpt-5.4-mini");
 
     safetyGateService.assertAllowed(context, {
       tenantId: context.tenantId,
@@ -189,7 +269,8 @@ export class LlmGatewayService {
     return this.router.get(providerKey).complete({
       model,
       prompt: renderPrompt(version.body, input.variables ?? {}),
-      variables: input.variables
+      variables: input.variables,
+      apiKey: context.openAiApiKey
     }).then((result) => {
       const trace: PromptExecutionTrace = {
         id: createId("prompt_trace"),
@@ -236,8 +317,8 @@ export class LlmGatewayService {
     const version = prompt.versions.at(-1);
     if (!version) throw blocked(`Prompt ${input.promptKey} has no version`);
     const config = this.repository.getTenantConfig(context.tenantId);
-    const providerKey = String(process.env.LLM_PROVIDER ?? config.modelPolicy.provider ?? "mock");
-    const model = input.model ?? String(process.env.LLM_MODEL ?? (config.modelPolicy.allowedModels as string[] | undefined)?.[0] ?? "mock-enterprise-analyst");
+    const providerKey = String(process.env.LLM_PROVIDER ?? config.modelPolicy.provider ?? "openai");
+    const model = input.model ?? String(process.env.LLM_MODEL ?? (config.modelPolicy.allowedModels as string[] | undefined)?.[0] ?? "gpt-5.4-mini");
 
     safetyGateService.assertAllowed(context, {
       tenantId: context.tenantId,
@@ -251,7 +332,8 @@ export class LlmGatewayService {
 
     const rendered = renderPrompt(version.body, input.variables ?? {});
     const provider = this.router.get(providerKey);
-    const stream = provider.stream?.({ model, prompt: rendered, variables: input.variables }) ?? this.streamFromComplete(provider, { model, prompt: rendered, variables: input.variables });
+    const providerInput = { model, prompt: rendered, variables: input.variables, apiKey: context.openAiApiKey };
+    const stream = provider.stream?.(providerInput) ?? this.streamFromComplete(provider, providerInput);
     let text = "";
     for await (const token of stream) {
       text += token;
@@ -303,7 +385,7 @@ export class LlmGatewayService {
     return this.repository.snapshot().promptExecutionTraces.filter((trace) => trace.tenantId === context.tenantId);
   }
 
-  private async *streamFromComplete(provider: ModelProvider, input: { model: string; prompt: string; variables?: JsonRecord }): AsyncIterable<string> {
+  private async *streamFromComplete(provider: ModelProvider, input: ModelProviderInput): AsyncIterable<string> {
     const result = await provider.complete(input);
     yield result.text;
   }
@@ -317,3 +399,31 @@ function renderPrompt(template: string, variables: JsonRecord): string {
 }
 
 export const llmGatewayService = new LlmGatewayService(store);
+
+function getOpenAiApiKey(override?: string): string {
+  const apiKey = override || process.env.OPENAI_API_KEY;
+  if (!apiKey) throw blocked("OPENAI_API_KEY is required for real OpenAI model calls.");
+  return apiKey;
+}
+
+function getOpenAiBaseUrl(): string {
+  return (process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "");
+}
+
+function extractResponseText(json: any): string {
+  if (typeof json.output_text === "string") return json.output_text;
+  const output = Array.isArray(json.output) ? json.output : [];
+  return output
+    .flatMap((item: any) => Array.isArray(item.content) ? item.content : [])
+    .map((content: any) => content.text)
+    .filter((text: unknown): text is string => typeof text === "string")
+    .join("");
+}
+
+async function safeResponseText(response: Response): Promise<string> {
+  try {
+    return (await response.text()).slice(0, 400);
+  } catch {
+    return "response body unavailable";
+  }
+}
