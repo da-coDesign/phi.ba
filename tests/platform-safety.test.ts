@@ -126,6 +126,10 @@ describe("enterprise safety controls", () => {
     expect(classifyAgentIntent("Rakip faiz oranlarını karşılaştır")).toBe("market_compare");
     expect(classifyAgentIntent("Faiz 3.6 olursa ne olur?")).toBe("simulation");
     expect(classifyAgentIntent("Bunun için Jira ticket oluştur")).toBe("action_request");
+    expect(classifyAgentIntent("kaç tane müşteri var?")).toBe("data_query");
+    expect(classifyAgentIntent("email kampanya dönüşümü nasıl?")).toBe("data_query");
+    expect(classifyAgentIntent("şube performansını açabilir misin?")).toBe("data_query");
+    expect(classifyAgentIntent("bu metrik için aksiyon al")).toBe("action_request");
   });
 
   it("returns card-ready data for metric questions through the central agent", async () => {
@@ -140,6 +144,21 @@ describe("enterprise safety controls", () => {
     expect(final.result.mode).toBe("data_card");
     expect(final.result.sql).toContain("v_card_approval_daily");
     expect(final.result.rows.length).toBeGreaterThan(0);
+  });
+
+  it("does not turn customer count questions into approval workflows", async () => {
+    let final: any;
+    for await (const chunk of agentService.streamExecute(context(), {
+      agentId: "agent_risk",
+      message: "kaç tane müşteri var?"
+    })) {
+      if (chunk.event === "done") final = chunk.data;
+    }
+
+    expect(final.status).toBe("completed");
+    expect(final.result.mode).toBe("data_card");
+    expect(final.result.sql).toContain("v_customer_360");
+    expect(final.result.toolCalls[0]?.toolKey).toBe("query.run");
   });
 
   it("routes broad banking topics to allowlisted reporting views", () => {

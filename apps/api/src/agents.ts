@@ -390,13 +390,21 @@ export function classifyAgentIntent(message: string): AgentIntent {
   const normalized = message.toLocaleLowerCase("tr-TR").trim();
   if (!normalized) return "clarification_needed";
   if (/^(merhaba|selam|hi|hello|teşekkür|tesekkur)\b/.test(normalized)) return "direct_answer";
-  if (/(jira|ticket|epic|email|e-mail|mail|slack|teams|görev|gorev|bildirim|aksiyon|sunum|deck|oluştur|olustur|aç|ac|gönder|gonder)/.test(normalized)) return "action_request";
+  if (isActionRequest(normalized)) return "action_request";
   if (/(simülasyon|simulasyon|what[- ]?if|ne olur|senaryo|faiz.*(etki|değiş|degis)|oran.*(artarsa|düşerse|duserse))/.test(normalized)) return "simulation";
   if (/(rakip|competitor|pazar|market|faiz oran|interest rate|karşılaştır|karsilastir)/.test(normalized)) return "market_compare";
   if (/(doküman|dokuman|belge|politika|policy|prosedür|prosedur|sözlük|sozluk|tanım|definition|approval policy|onay politikası)/.test(normalized)) return "knowledge_rag";
   if (/(npl|risk|onay|approval|kart|card|hacim|volume|segment|müşteri|musteri|customer|ürün|urun|product|metrik|trend|düştü|dustu|arttı|artti|neden|hangi|kaç|kac|liste|top|son \d+|retention|tutunma|kohort|cohort|şikayet|sikayet|complaint|fraud|dolandır|dolandir|tahsilat|collections|şube|sube|branch|kampanya|campaign|dönüşüm|donusum|mevduat|deposit|bakiye|balance)/.test(normalized)) return "data_query";
   if (normalized.length < 12) return "clarification_needed";
   return "direct_answer";
+}
+
+function isActionRequest(normalized: string): boolean {
+  const actionObject = "(jira|ticket|epic|email|e-mail|mail|slack|teams|görev|gorev|bildirim|aksiyon|sunum|deck)";
+  const actionVerb = "(oluştur|olustur|aç|ac|gönder|gonder|yarat|assign|ata|ilet)";
+  return new RegExp(`(^|\\s)${actionObject}(\\s|$).*?(^|\\s)${actionVerb}(\\s|$)`).test(normalized) ||
+    new RegExp(`(^|\\s)${actionVerb}(\\s|$).*?(^|\\s)${actionObject}(\\s|$)`).test(normalized) ||
+    /(^|\s)(aksiyon al|iş emri aç|is emri ac|onaya gönder|onaya gonder)(\s|$)/.test(normalized);
 }
 
 function decideAgentPath(message: string, explicitToolKey?: string): AgentDecision {
