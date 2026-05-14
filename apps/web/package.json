@@ -9,7 +9,6 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@openai/chatkit-react": "^1.5.1",
     "@phi-ba/contracts": "0.1.0",
     "@phi-ba/shared": "0.1.0"
   }
