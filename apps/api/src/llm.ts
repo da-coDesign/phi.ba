@@ -401,7 +401,7 @@ function renderPrompt(template: string, variables: JsonRecord): string {
 export const llmGatewayService = new LlmGatewayService(store);
 
 function getOpenAiApiKey(override?: string): string {
-  const apiKey = override || process.env.OPENAI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY || override;
   if (!apiKey) throw blocked("OPENAI_API_KEY is required for real OpenAI model calls.");
   return apiKey;
 }
